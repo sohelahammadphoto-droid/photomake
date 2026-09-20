@@ -67,6 +67,15 @@ export default function Home() {
   const [generatedHtml, setGeneratedHtml] = useState("");
   const [canvasInfo, setCanvasInfo] = useState({ width: 1000, height: 1400 });
   const [colors, setColors] = useState({ dominant: "#ffffff", palette: [] });
+  const [isLiveBuilding, setIsLiveBuilding] = useState(false);
+  const [liveCursor, setLiveCursor] = useState({
+    x: 0,
+    y: 0,
+    visible: false,
+    agent: "Groq AI Coder",
+    action: "",
+    activeBox: null,
+  });
 
   // Interactive View Controls
   const [viewMode, setViewMode] = useState("side-by-side"); // "side-by-side" | "slider" | "overlay" | "code"
@@ -428,10 +437,44 @@ export default function Home() {
         parsedHtml = buildHtmlFromTexts(parsedTexts, parsedCanvas, parsedColors);
       }
 
-      setTexts(parsedTexts);
+      // Open Studio Canvas immediately
       setCanvasInfo(parsedCanvas);
       setColors(parsedColors);
       setGeneratedHtml(parsedHtml);
+      setTexts([]);
+      setIsLiveBuilding(true);
+
+      const agentName =
+        engine === "multi-agent"
+          ? "Groq Coder (540 tok/s)"
+          : engine === "gemini"
+          ? "Gemini Vision"
+          : "Colab T4";
+
+      // Live Multiplayer Figma building loop with real extracted coordinates
+      for (let i = 0; i < parsedTexts.length; i++) {
+        const item = parsedTexts[i];
+        const [x, y, w, h] = item.box || [50, 50, 100, 30];
+
+        setLiveCursor({
+          x: x,
+          y: y,
+          visible: true,
+          agent: agentName,
+          action: `Placing: "${item.text.slice(0, 20)}..."`,
+          activeBox: [x, y, w, h],
+        });
+
+        setTexts((prev) => [...prev, item]);
+        setSelectedId(item.id);
+
+        // Dynamic human-speed pacing (total ~2-3s for all items)
+        const delay = Math.max(20, Math.min(60, 2200 / parsedTexts.length));
+        await new Promise((r) => setTimeout(r, delay));
+      }
+
+      setLiveCursor((prev) => ({ ...prev, visible: false, activeBox: null }));
+      setIsLiveBuilding(false);
 
       if (parsedTexts.length > 0) {
         setSelectedId(parsedTexts[0].id);
@@ -1051,7 +1094,7 @@ export default function Home() {
 
       {/* ── MAIN WORKSPACE AREA ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
-        {texts.length === 0 ? (
+        {texts.length === 0 && !isLiveBuilding ? (
           /* ── EMPTY / WELCOME LANDING STATE ── */
           <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
             <div className="max-w-xl p-8 rounded-3xl bg-gradient-to-b from-[#141728] to-[#0c0e18] border border-[#252945] shadow-2xl relative overflow-hidden">
@@ -1311,6 +1354,51 @@ export default function Home() {
                             </div>
                           );
                         })}
+
+                        {/* Live Active Bounding Box while Cursor is Drawing */}
+                        {liveCursor.visible && liveCursor.activeBox && (
+                          <div
+                            className="absolute pointer-events-none z-30 border-2 border-dashed border-violet-500 bg-violet-500/10 rounded transition-all duration-100 ease-out"
+                            style={{
+                              left: liveCursor.activeBox[0],
+                              top: liveCursor.activeBox[1],
+                              width: liveCursor.activeBox[2],
+                              height: liveCursor.activeBox[3],
+                            }}
+                          >
+                            <div className="absolute -top-1 -left-1 w-2 h-2 bg-white border border-violet-600 rounded-sm" />
+                            <div className="absolute -top-1 -right-1 w-2 h-2 bg-white border border-violet-600 rounded-sm" />
+                            <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-white border border-violet-600 rounded-sm" />
+                            <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-white border border-violet-600 rounded-sm" />
+                          </div>
+                        )}
+
+                        {/* Figma Virtual Multiplayer Agent Cursor */}
+                        {liveCursor.visible && (
+                          <div
+                            className="absolute pointer-events-none z-50 transition-all duration-150 ease-out flex flex-col items-start"
+                            style={{
+                              left: liveCursor.x,
+                              top: liveCursor.y,
+                            }}
+                          >
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="drop-shadow-lg">
+                              <path
+                                d="M5.65376 12.3673H5.46026L5.31717 12.4976L0.500002 16.8829L0.500002 1.19841L11.7841 12.3673H5.65376Z"
+                                fill="#8b5cf6"
+                                stroke="white"
+                                strokeWidth="1.5"
+                              />
+                            </svg>
+                            <div className="ml-3 -mt-1 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-2xl border border-white/50 flex items-center gap-1.5 whitespace-nowrap">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                              <span>{liveCursor.agent}</span>
+                              <span className="text-[9px] text-violet-200 font-normal truncate max-w-[130px]">
+                                {liveCursor.action}
+                              </span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
