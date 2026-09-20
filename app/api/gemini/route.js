@@ -23,6 +23,37 @@ const safetySettings = [
   },
 ];
 
+async function resolveModelCandidates(apiKey) {
+  const defaultPriority = [
+    "gemini-1.5-flash-latest",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-pro",
+  ];
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (res.ok) {
+      const data = await res.json();
+      const available = (data.models || [])
+        .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+        .map((m) => m.name.replace("models/", ""));
+
+      const matched = defaultPriority.filter((p) => available.includes(p));
+      if (matched.length > 0) return matched;
+      if (available.length > 0) return available;
+    }
+  } catch (err) {
+    console.warn("Dynamic model lookup failed, using defaults:", err);
+  }
+
+  return defaultPriority;
+}
+
 export async function POST(req) {
   try {
     const body = await req.json();
@@ -57,14 +88,9 @@ export async function POST(req) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      safetySettings,
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.1,
-      },
-      systemInstruction: `You are an expert Document, Receipt, Form, and UI layout-to-pixel-perfect HTML/CSS compiler.
+    const candidateModels = await resolveModelCandidates(apiKey);
+
+    const systemInstruction = `You are an expert Document, Receipt, Form, and UI layout-to-pixel-perfect HTML/CSS compiler.
 Your job is purely technical OCR and layout reconstruction:
 1. Extract EVERY single text item visible in the image (regardless of language - Bengali, English, Arabic, numerals).
 2. For each text item, assign a unique numeric ID string ("0", "1", ...), the exact visible text, approximate bounding box [x, y, width, height] in pixels, font_size, and color.
@@ -78,8 +104,7 @@ Your job is purely technical OCR and layout reconstruction:
   "canvas": { "width": 1000, "height": 1400 },
   "colors": { "dominant": "#ffffff", "palette": ["#000000", "#ffffff"] },
   "html": "<!DOCTYPE html><html>...</html>"
-}`,
-    });
+}`;
 
     const prompt = "Analyze this image and generate the exact pixel-perfect editable HTML/CSS replica and all text coordinates in JSON format. Do not skip or summarize any text.";
 
@@ -90,14 +115,46 @@ Your job is purely technical OCR and layout reconstruction:
       },
     };
 
-    const result = await model.generateContent([prompt, imagePart]);
+    let result = null;
+    let lastError = null;
+
+    for (const modelName of candidateModels) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          safetySettings,
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+          },
+          systemInstruction,
+        });
+
+        result = await model.generateContent([prompt, imagePart]);
+        if (result && result.response) {
+          console.log(`Successfully generated content using model: ${modelName}`);
+          break;
+        }
+      } catch (err) {
+        console.warn(`Model ${modelName} failed:`, err.message);
+        lastError = err;
+        if (err.message && (err.message.includes("404") || err.message.includes("not found"))) {
+          continue; // Try next candidate model
+        }
+        throw err;
+      }
+    }
+
+    if (!result) {
+      throw lastError || new Error("Failed to generate content with available Gemini models.");
+    }
+
     const responseText = result.response.text();
 
     let parsed;
     try {
       parsed = JSON.parse(responseText);
     } catch (e) {
-      // Fallback regex extract in case of markdown wrapping
       const match = responseText.match(/\{[\s\S]*\}/);
       if (match) {
         parsed = JSON.parse(match[0]);
