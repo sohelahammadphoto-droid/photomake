@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { COLAB_CODE } from "./lib/colabCode";
+
 
 const STORAGE_KEY = "colabBackendUrl";
 
@@ -34,19 +34,14 @@ export default function Home() {
   // ── Copy Colab Code ──
   const copyColabCode = async () => {
     try {
-      await navigator.clipboard.writeText(COLAB_CODE);
+      const res = await fetch("/colabCode.json");
+      const data = await res.json();
+      await navigator.clipboard.writeText(data.code);
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
     } catch {
-      // Fallback
-      const ta = document.createElement("textarea");
-      ta.value = COLAB_CODE;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 3000);
+      setCopied(false);
+      alert("Copy failed. Please try again.");
     }
   };
 
@@ -241,7 +236,7 @@ export default function Home() {
                 </button>
               </div>
               <pre className="p-3 text-xs text-slate-400 font-mono overflow-hidden h-28 relative">
-                <code>{COLAB_CODE.slice(0, 600)}...</code>
+                <code>{"# AI Colab Backend Code\n# FastAPI + Ollama (llava + hermes3:8b) + Cloudflare Tunnel\n# Click Copy Code button to get the full code..."}...</code>
                 <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#090920]" />
               </pre>
             </div>
