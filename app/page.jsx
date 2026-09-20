@@ -7,6 +7,8 @@ export default function Home() {
   // ── Engine & Connection State ──
   const [engine,     setEngine]     = useState("gemini"); // 'gemini' | 'colab'
   const [geminiKey,  setGeminiKey]  = useState("");
+  const [keyStatus,  setKeyStatus]  = useState("idle"); // idle | validating | ok | error
+  const [keyError,   setKeyError]   = useState("");
   const [backendUrl, setBackendUrl] = useState("");
   const [urlStatus,  setUrlStatus]  = useState("idle"); // idle | checking | ok | error
   const [file,       setFile]       = useState(null);
@@ -46,10 +48,52 @@ export default function Home() {
   const splitRef    = useRef(null);
   const isDragging  = useRef(false);
 
+  // ── Validate Gemini API Key with Google ──
+  const validateGeminiKey = async (keyToTest) => {
+    const k = (keyToTest || geminiKey).trim();
+    if (!k) {
+      setKeyError("API Key দিন");
+      setKeyStatus("error");
+      localStorage.removeItem("geminiApiKey");
+      return;
+    }
+    setKeyStatus("validating");
+    setKeyError("");
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${k}`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models && data.models.length > 0) {
+          setKeyStatus("ok");
+          setGeminiKey(k);
+          localStorage.setItem("geminiApiKey", k);
+          setKeyError("");
+        } else {
+          setKeyStatus("error");
+          setKeyError("এই Key-তে কোনো মডেল পাওয়া যায়নি।");
+          localStorage.removeItem("geminiApiKey");
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setKeyStatus("error");
+        setKeyError(errData.error?.message || "ভুল API Key! অনুগ্রহ করে সঠিক Key দিন।");
+        localStorage.removeItem("geminiApiKey");
+      }
+    } catch (e) {
+      setKeyStatus("error");
+      setKeyError("ভ্যালিডেশন ব্যর্থ হয়েছে। ইন্টারনেট সংযোগ চেক করুন।");
+    }
+  };
+
   // Restore saved Backend URL & Gemini Key
   useEffect(() => {
     const savedKey = localStorage.getItem("geminiApiKey");
-    if (savedKey) setGeminiKey(savedKey);
+    if (savedKey) {
+      setGeminiKey(savedKey);
+      validateGeminiKey(savedKey);
+    }
 
     const savedUrl = localStorage.getItem(STORAGE_KEY);
     if (savedUrl) {
@@ -134,8 +178,8 @@ export default function Home() {
   // ── ANALYZE IMAGE (DIRECT BROWSER-TO-COLAB FETCH) ──
   const startAnalyze = async () => {
     if (!file) return;
-    if (engine === "gemini" && !geminiKey.trim()) {
-      setError("অনুগ্রহ করে আপনার Google AI Studio API Key দিন (aistudio.google.com থেকে ১ ক্লিকে ফ্রি নেওয়া যায়)।");
+    if (engine === "gemini" && keyStatus !== "ok") {
+      setError("অনুগ্রহ করে প্রথমে আপনার Gemini API Key টি Validate করুন।");
       return;
     }
     if (engine === "colab" && urlStatus !== "ok") {
@@ -369,9 +413,9 @@ export default function Home() {
         <div className="flex items-center gap-2 text-xs">
           {engine === "gemini" ? (
             <>
-              <span className={`w-2.5 h-2.5 rounded-full ${geminiKey.trim() ? "bg-emerald-500 animate-pulse" : "bg-amber-400"}`} />
+              <span className={`w-2.5 h-2.5 rounded-full ${keyStatus === "ok" ? "bg-emerald-500 animate-pulse" : keyStatus === "error" ? "bg-red-500" : "bg-amber-400"}`} />
               <span className="font-mono text-slate-300">
-                {geminiKey.trim() ? "Gemini 1.5 Flash: 0% Filter Ready ✅" : "Gemini API Key দিন 🔑"}
+                {keyStatus === "ok" ? "Gemini 1.5 Flash: Validated & Ready ✅" : "Gemini API Key Validate করুন 🔑"}
               </span>
             </>
           ) : (
@@ -455,27 +499,57 @@ export default function Home() {
           {/* Box 2: Key or URL Input */}
           <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
             <div>
-              <span className="text-xs font-bold text-white flex items-center gap-1.5 mb-1">
-                <span>2.</span> {engine === "gemini" ? "Google AI Studio API Key" : "Colab Cloudflare URL"}
-              </span>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <span>2.</span> {engine === "gemini" ? "Google AI Studio API Key" : "Colab Cloudflare URL"}
+                </span>
+                {engine === "gemini" && keyStatus === "ok" && (
+                  <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                    ✓ Validated
+                  </span>
+                )}
+                {engine === "colab" && urlStatus === "ok" && (
+                  <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                    ✓ Connected
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-slate-400">
                 {engine === "gemini"
-                  ? "aistudio.google.com থেকে ফ্রি Key দিন"
+                  ? "Key পেস্ট করে 'Validate' চাপুন (ভ্যালিড হলে সেভ হবে)"
                   : "Colab থেকে পাওয়া পাবলিক URL টি দিন"}
               </p>
             </div>
+
             <div className="flex gap-1.5 mt-2.5">
               {engine === "gemini" ? (
-                <input
-                  type="password"
-                  value={geminiKey}
-                  onChange={(e) => {
-                    setGeminiKey(e.target.value);
-                    localStorage.setItem("geminiApiKey", e.target.value);
-                  }}
-                  placeholder="AIzaSy... (Paste Free Gemini Key)"
-                  className="flex-1 px-2.5 py-1.5 bg-[#0b0c12] border border-[#2c3049] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-violet-500"
-                />
+                <>
+                  <input
+                    type="password"
+                    value={geminiKey}
+                    onChange={(e) => {
+                      setGeminiKey(e.target.value);
+                      setKeyStatus("idle");
+                      setKeyError("");
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && validateGeminiKey()}
+                    placeholder="AIzaSy... (Paste Gemini Key)"
+                    className={`flex-1 px-2.5 py-1.5 bg-[#0b0c12] border rounded-lg text-white text-xs font-mono focus:outline-none transition-colors
+                      ${keyStatus === "ok" ? "border-emerald-500/60" : keyStatus === "error" ? "border-red-500/60" : "border-[#2c3049] focus:border-violet-500"}`}
+                  />
+                  <button
+                    onClick={() => validateGeminiKey()}
+                    disabled={!geminiKey.trim() || keyStatus === "validating"}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap
+                      ${keyStatus === "ok"
+                        ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/40"
+                        : keyStatus === "validating"
+                        ? "bg-yellow-500/20 text-yellow-400 animate-pulse"
+                        : "bg-violet-600 hover:bg-violet-500 text-white"}`}
+                  >
+                    {keyStatus === "validating" ? "..." : keyStatus === "ok" ? "Validated ✓" : "Validate"}
+                  </button>
+                </>
               ) : (
                 <>
                   <input
@@ -497,6 +571,10 @@ export default function Home() {
                 </>
               )}
             </div>
+
+            {engine === "gemini" && keyError && (
+              <p className="text-[10px] text-red-400 mt-1.5 font-medium">✕ {keyError}</p>
+            )}
           </div>
 
           {/* Box 3: Image Upload & Action */}
@@ -519,7 +597,7 @@ export default function Home() {
               
               <button
                 onClick={startAnalyze}
-                disabled={!file || loading || (engine === "gemini" ? !geminiKey.trim() : urlStatus !== "ok")}
+                disabled={!file || loading || (engine === "gemini" ? keyStatus !== "ok" : urlStatus !== "ok")}
                 className="px-4 py-2 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-purple-600 hover:opacity-95 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md shadow-violet-500/20 transition-all whitespace-nowrap"
               >
                 {loading ? `⏳ Processing (${elapsed}s)` : "🚀 Convert to Figma"}
