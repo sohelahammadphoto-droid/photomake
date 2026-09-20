@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { orchestrateAutonomousTeam, DEFAULT_KEYS } from "./lib/multi_agent_team";
 
 const STORAGE_KEY_COLAB = "ai_image_editor_backend_url";
 const STORAGE_KEY_GEMINI = "geminiApiKey";
+const STORAGE_KEY_AGENT_KEYS = "ai_agent_team_keys";
 
 // ── Google Gemini Multimodal Vision System Prompt ──
 const SYSTEM_PROMPT = `You are a World-Class Document, Receipt, Deed, Form, and UI layout-to-pixel-perfect HTML/CSS compiler.
@@ -32,11 +34,21 @@ Your task is purely technical OCR transcription, font matching, and spatial layo
 
 export default function Home() {
   // Engine & Keys
-  const [engine, setEngine] = useState("gemini"); // "gemini" | "colab"
+  const [engine, setEngine] = useState("multi-agent"); // "multi-agent" | "gemini" | "colab"
+  const [showKeyModal, setShowKeyModal] = useState(false);
   const [geminiKey, setGeminiKey] = useState("");
   const [keyStatus, setKeyStatus] = useState("idle"); // "idle" | "validating" | "ok" | "error"
   const [keyError, setKeyError] = useState("");
   const [activeModel, setActiveModel] = useState("gemini-2.5-flash");
+
+  const [agentKeys, setAgentKeys] = useState({
+    gemini: "",
+    groq: DEFAULT_KEYS.groq,
+    openrouter: DEFAULT_KEYS.openrouter,
+    mistral: DEFAULT_KEYS.mistral,
+    bynara: DEFAULT_KEYS.bynara,
+    bynaraEndpoint: DEFAULT_KEYS.bynaraEndpoint,
+  });
 
   const [colabUrl, setColabUrl] = useState("");
   const [urlStatus, setUrlStatus] = useState("idle"); // "idle" | "checking" | "ok" | "error"
@@ -89,6 +101,13 @@ export default function Home() {
       if (savedUrl) {
         setColabUrl(savedUrl);
         pingColab(savedUrl);
+      }
+      const savedAgents = localStorage.getItem(STORAGE_KEY_AGENT_KEYS);
+      if (savedAgents) {
+        try {
+          const parsed = JSON.parse(savedAgents);
+          setAgentKeys((prev) => ({ ...prev, ...parsed }));
+        } catch {}
       }
     }
   }, []);
@@ -373,7 +392,15 @@ export default function Home() {
 
       let result;
 
-      if (engine === "gemini") {
+      if (engine === "multi-agent") {
+        // Autonomous Multi-AI Agent Swarm (Vision -> Groq 540 tok/s Coder -> DeepSeek Reviewer)
+        result = await orchestrateAutonomousTeam(
+          base64Data,
+          mimeType,
+          { ...agentKeys, gemini: geminiKey },
+          setProgressStage
+        );
+      } else if (engine === "gemini") {
         // Direct Client-to-Google call - 100% Free, NO VERCEL 504 TIMEOUT!
         result = await runGeminiDirect(base64Data, mimeType, geminiKey);
       } else {
@@ -734,7 +761,9 @@ export default function Home() {
           <div className="flex items-center gap-2 bg-[#121420] px-3 py-1.5 rounded-lg border border-[#23273e] text-xs">
             <span
               className={`w-2 h-2 rounded-full ${
-                engine === "gemini"
+                engine === "multi-agent"
+                  ? "bg-emerald-400 animate-pulse"
+                  : engine === "gemini"
                   ? keyStatus === "ok"
                     ? "bg-emerald-400 animate-pulse"
                     : "bg-amber-400"
@@ -744,7 +773,15 @@ export default function Home() {
               }`}
             />
             <span className="font-mono text-[11px] text-slate-300">
-              {engine === "gemini" ? (keyStatus === "ok" ? `${activeModel} ✅` : "Key Needed") : urlStatus === "ok" ? "Colab T4 ✅" : "Colab Offline"}
+              {engine === "multi-agent"
+                ? "🤖 4 AI Agents Ready"
+                : engine === "gemini"
+                ? keyStatus === "ok"
+                  ? `${activeModel} ✅`
+                  : "Key Needed"
+                : urlStatus === "ok"
+                ? "Colab T4 ✅"
+                : "Colab Offline"}
             </span>
           </div>
         </div>
@@ -760,45 +797,66 @@ export default function Home() {
                 <span className="text-violet-400 font-mono">1.</span> AI Engine
               </span>
               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                0% Censorship · Safe
+                0% Censorship · Swarm
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-3 gap-1">
+              <button
+                onClick={() => setEngine("multi-agent")}
+                className={`py-1.5 px-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 ${
+                  engine === "multi-agent"
+                    ? "bg-gradient-to-r from-violet-600 via-fuchsia-600 to-indigo-600 text-white shadow-md shadow-violet-600/30"
+                    : "bg-[#1b1e33] text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>🤖</span> AI Team
+              </button>
               <button
                 onClick={() => setEngine("gemini")}
-                className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-1.5 px-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 ${
                   engine === "gemini"
                     ? "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-md shadow-violet-600/30"
                     : "bg-[#1b1e33] text-slate-400 hover:text-white"
                 }`}
               >
-                <span>⚡</span> Google Gemini
+                <span>⚡</span> Gemini
               </button>
               <button
                 onClick={() => setEngine("colab")}
-                className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-1.5 px-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 ${
                   engine === "colab"
                     ? "bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-md shadow-amber-600/30"
                     : "bg-[#1b1e33] text-slate-400 hover:text-white"
                 }`}
               >
-                <span>⚡</span> Colab T4 GPU
+                <span>⚡</span> Colab T4
               </button>
             </div>
             <p className="text-[10px] text-slate-400 mt-1.5">
-              {engine === "gemini"
+              {engine === "multi-agent"
+                ? "✓ 4 AI Models: Gemini/Pixtral (Vision) + Groq 540 t/s (Coder) + DeepSeek (Reviewer)"
+                : engine === "gemini"
                 ? "✓ 1,500 রিকোয়েস্ট/দিন সম্পূর্ণ ফ্রি · ব্রাউজার থেকে সরাসরি গুগল ফেচ (No Timeout)"
                 : "✓ Colab ক্লাউডফ্লেয়ার টানেল · আনলিমিটেড ব্যাকএন্ড GPU"}
             </p>
           </div>
 
-          {/* Card 2: API Key / Colab URL */}
+          {/* Card 2: AI Team or API Key / Colab URL */}
           <div className="bg-[#141726] p-3 rounded-xl border border-[#242840] flex flex-col justify-between">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-bold text-white flex items-center gap-1.5">
                 <span className="text-violet-400 font-mono">2.</span>{" "}
-                {engine === "gemini" ? "Google AI Studio API Key" : "Colab Cloudflare URL"}
+                {engine === "multi-agent"
+                  ? "Autonomous Multi-AI Swarm"
+                  : engine === "gemini"
+                  ? "Google AI Studio API Key"
+                  : "Colab Cloudflare URL"}
               </span>
+              {engine === "multi-agent" && (
+                <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                  ✓ 4 Agents Ready
+                </span>
+              )}
               {engine === "gemini" && keyStatus === "ok" && (
                 <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
                   ✓ Validated
@@ -811,66 +869,89 @@ export default function Home() {
               )}
             </div>
 
-            <div className="flex gap-1.5 my-1">
-              {engine === "gemini" ? (
-                <>
-                  <input
-                    type="password"
-                    value={geminiKey}
-                    onChange={(e) => {
-                      setGeminiKey(e.target.value);
-                      setKeyStatus("idle");
-                      setKeyError("");
-                    }}
-                    onKeyDown={(e) => e.key === "Enter" && validateKeyWithGoogle()}
-                    placeholder="AIzaSy... (Paste Free Gemini Key)"
-                    className={`flex-1 px-2.5 py-1.5 bg-[#0b0d14] border rounded-lg text-white text-xs font-mono focus:outline-none transition-colors ${
-                      keyStatus === "ok"
-                        ? "border-emerald-500/60"
-                        : keyStatus === "error"
-                        ? "border-red-500/60"
-                        : "border-[#2b304d] focus:border-violet-500"
-                    }`}
-                  />
-                  <button
-                    onClick={() => validateKeyWithGoogle()}
-                    disabled={!geminiKey.trim() || keyStatus === "validating"}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                      keyStatus === "ok"
-                        ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/40"
-                        : keyStatus === "validating"
-                        ? "bg-yellow-500/20 text-yellow-400 animate-pulse"
-                        : "bg-violet-600 hover:bg-violet-500 text-white"
-                    }`}
-                  >
-                    {keyStatus === "validating" ? "..." : keyStatus === "ok" ? "Validated ✓" : "Validate"}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <input
-                    type="text"
-                    value={colabUrl}
-                    onChange={(e) => {
-                      setColabUrl(e.target.value);
-                      setUrlStatus("idle");
-                    }}
-                    onKeyDown={(e) => e.key === "Enter" && pingColab()}
-                    placeholder="https://xxx.trycloudflare.com"
-                    className="flex-1 px-2.5 py-1.5 bg-[#0b0d14] border border-[#2b304d] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-amber-500"
-                  />
-                  <button
-                    onClick={() => pingColab()}
-                    disabled={!colabUrl.trim() || urlStatus === "checking"}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-all whitespace-nowrap"
-                  >
-                    {urlStatus === "checking" ? "..." : urlStatus === "ok" ? "Connected ✓" : "Connect"}
-                  </button>
-                </>
-              )}
-            </div>
+            {engine === "multi-agent" ? (
+              <div className="flex items-center justify-between gap-2 my-1 bg-[#0b0d14] p-2 rounded-lg border border-[#23273e]">
+                <div className="text-[10px] text-slate-300 space-y-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span>👁️ Vision: Gemini / Pixtral</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-emerald-400 font-mono">
+                    <span>⚡ Coder: Groq LPU (540 tok/s)</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowKeyModal(true)}
+                  className="px-2.5 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-xs font-bold rounded-lg transition-all whitespace-nowrap"
+                >
+                  ⚙️ Keys & Team
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-1.5 my-1">
+                {engine === "gemini" ? (
+                  <>
+                    <input
+                      type="password"
+                      value={geminiKey}
+                      onChange={(e) => {
+                        setGeminiKey(e.target.value);
+                        setKeyStatus("idle");
+                        setKeyError("");
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && validateKeyWithGoogle()}
+                      placeholder="AIzaSy... (Paste Free Gemini Key)"
+                      className={`flex-1 px-2.5 py-1.5 bg-[#0b0d14] border rounded-lg text-white text-xs font-mono focus:outline-none transition-colors ${
+                        keyStatus === "ok"
+                          ? "border-emerald-500/60"
+                          : keyStatus === "error"
+                          ? "border-red-500/60"
+                          : "border-[#2b304d] focus:border-violet-500"
+                      }`}
+                    />
+                    <button
+                      onClick={() => validateKeyWithGoogle()}
+                      disabled={!geminiKey.trim() || keyStatus === "validating"}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                        keyStatus === "ok"
+                          ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/40"
+                          : keyStatus === "validating"
+                          ? "bg-yellow-500/20 text-yellow-400 animate-pulse"
+                          : "bg-violet-600 hover:bg-violet-500 text-white"
+                      }`}
+                    >
+                      {keyStatus === "validating" ? "..." : keyStatus === "ok" ? "Validated ✓" : "Validate"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value={colabUrl}
+                      onChange={(e) => {
+                        setColabUrl(e.target.value);
+                        setUrlStatus("idle");
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && pingColab()}
+                      placeholder="https://xxx.trycloudflare.com"
+                      className="flex-1 px-2.5 py-1.5 bg-[#0b0d14] border border-[#2b304d] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-amber-500"
+                    />
+                    <button
+                      onClick={() => pingColab()}
+                      disabled={!colabUrl.trim() || urlStatus === "checking"}
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition-all whitespace-nowrap"
+                    >
+                      {urlStatus === "checking" ? "..." : urlStatus === "ok" ? "Connected ✓" : "Connect"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
-            {engine === "gemini" ? (
+            {engine === "multi-agent" ? (
+              <p className="text-[10px] text-slate-400">
+                Groq, OpenRouter, Mistral এবং Bynara প্রাক-কনফিগার করা আছে।
+              </p>
+            ) : engine === "gemini" ? (
               <div className="flex items-center justify-between text-[10px]">
                 <a
                   href="https://aistudio.google.com/app/apikey"
@@ -918,7 +999,15 @@ export default function Home() {
               </button>
               <button
                 onClick={startAnalyze}
-                disabled={!file || loading || (engine === "gemini" ? keyStatus !== "ok" : urlStatus !== "ok")}
+                disabled={
+                  !file ||
+                  loading ||
+                  (engine === "gemini"
+                    ? keyStatus !== "ok"
+                    : engine === "colab"
+                    ? urlStatus !== "ok"
+                    : false)
+                }
                 className="flex-1 py-1.5 px-4 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-indigo-600 hover:opacity-95 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md shadow-violet-600/30 transition-all flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
                 {loading ? `⏳ Processing (${elapsed}s)` : "🚀 Convert to Figma"}
@@ -1574,6 +1663,124 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      {/* ── AI AGENTS TEAM KEYS MODAL ── */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="bg-[#121422] border border-[#282d47] rounded-2xl w-full max-w-xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between mb-4 border-b border-[#232740] pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="text-2xl">🤖</span>
+                <div>
+                  <h3 className="text-sm font-black text-white">Autonomous Multi-AI Team Hub</h3>
+                  <p className="text-[11px] text-slate-400">
+                    মডেলগুলো মিলেমিশে স্বয়ংক্রিয়ভাবে চোখের পলকে কাজ সম্পন্ন করবে
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowKeyModal(false)}
+                className="text-slate-400 hover:text-white text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs max-h-[60vh] overflow-y-auto pr-1">
+              {/* Groq LPU */}
+              <div className="bg-[#0b0d14] p-3 rounded-xl border border-[#23273e]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>⚡ 1. Groq LPU (Ultra-Fast 540 tok/s Coder)</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-mono">Qwen 2.5 Coder 32B</span>
+                </div>
+                <input
+                  type="password"
+                  value={agentKeys.groq}
+                  onChange={(e) => setAgentKeys((prev) => ({ ...prev, groq: e.target.value }))}
+                  placeholder="gsk_..."
+                  className="w-full px-2.5 py-2 bg-[#141624] border border-[#252a42] rounded-lg text-white font-mono text-[11px] focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              {/* OpenRouter */}
+              <div className="bg-[#0b0d14] p-3 rounded-xl border border-[#23273e]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-fuchsia-300 flex items-center gap-1.5">
+                    <span>🧠 2. OpenRouter (Reasoning / Reviewer)</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-mono">DeepSeek R1 Free</span>
+                </div>
+                <input
+                  type="password"
+                  value={agentKeys.openrouter}
+                  onChange={(e) => setAgentKeys((prev) => ({ ...prev, openrouter: e.target.value }))}
+                  placeholder="sk-or-v1-..."
+                  className="w-full px-2.5 py-2 bg-[#141624] border border-[#252a42] rounded-lg text-white font-mono text-[11px] focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              {/* Mistral AI */}
+              <div className="bg-[#0b0d14] p-3 rounded-xl border border-[#23273e]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                    <span>👁️ 3. Mistral AI (Pixtral 12B Vision Backup)</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-mono">Pixtral 12B</span>
+                </div>
+                <input
+                  type="password"
+                  value={agentKeys.mistral}
+                  onChange={(e) => setAgentKeys((prev) => ({ ...prev, mistral: e.target.value }))}
+                  placeholder="aiM7..."
+                  className="w-full px-2.5 py-2 bg-[#141624] border border-[#252a42] rounded-lg text-white font-mono text-[11px] focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              {/* Bynara */}
+              <div className="bg-[#0b0d14] p-3 rounded-xl border border-[#23273e]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                    <span>🌐 4. Bynara / Nara AI Router</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-mono">Agnes 2.5 Hub</span>
+                </div>
+                <input
+                  type="password"
+                  value={agentKeys.bynara}
+                  onChange={(e) => setAgentKeys((prev) => ({ ...prev, bynara: e.target.value }))}
+                  placeholder="sk-nry-..."
+                  className="w-full px-2.5 py-2 bg-[#141624] border border-[#252a42] rounded-lg text-white font-mono text-[11px] focus:outline-none focus:border-violet-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mt-5 pt-3 border-t border-[#232740]">
+              <button
+                onClick={() => {
+                  setAgentKeys(DEFAULT_KEYS);
+                  localStorage.removeItem(STORAGE_KEY_AGENT_KEYS);
+                  showToast("Default AI Keys রিস্টোর করা হয়েছে!");
+                }}
+                className="text-xs text-slate-400 hover:text-white"
+              >
+                Reset to Defaults
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.setItem(STORAGE_KEY_AGENT_KEYS, JSON.stringify(agentKeys));
+                  setShowKeyModal(false);
+                  showToast("সবগুলো AI Team Keys সফলভাবে সেভ হয়েছে! 💾");
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-600/30 hover:opacity-95"
+              >
+                Save Team Keys 💾
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
