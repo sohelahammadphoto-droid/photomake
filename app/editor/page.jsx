@@ -20,7 +20,7 @@ export default function EditorPage() {
     setTexts(d.texts || []);
     setGenHTML(d.generatedHTML || "");
     setFilename(d.filename || "design");
-    setImgSrc(`data:${d.mimeType};base64,${d.imageBase64}`);
+    setImgSrc(d.imageDataUrl || (d.imageBase64 ? `data:${d.mimeType || "image/png"};base64,${d.imageBase64}` : ""));
     const init = {};
     (d.texts || []).forEach(t => { init[t.id] = t.text; });
     setCurTexts(init);
