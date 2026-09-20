@@ -103,7 +103,8 @@ export default function Home() {
   const [sliderPos, setSliderPos] = useState(50);
   const [overlayOpacity, setOverlayOpacity] = useState(50);
   const [zoom, setZoom] = useState(100);
-  const [showBoxes, setShowBoxes] = useState(true);
+  const [showBoxes, setShowBoxes] = useState(false); // Clean preview by default without green wireframe boxes
+  const [showSidebars, setShowSidebars] = useState(false); // Clean view by default: hide layers & form inputs!
   const [selectedId, setSelectedId] = useState(null);
   const [searchLayer, setSearchLayer] = useState("");
   const [codeTab, setCodeTab] = useState("tsx"); // "tsx" | "html" | "json"
@@ -741,6 +742,17 @@ export default function Home() {
             >
               <span>💻</span> Code View
             </button>
+            <button
+              onClick={() => setShowSidebars((s) => !s)}
+              className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ml-1 border ${
+                showSidebars
+                  ? "bg-violet-600 text-white border-violet-500 shadow-md shadow-violet-600/30"
+                  : "bg-transparent text-slate-400 hover:text-white border-transparent hover:border-[#2a2f4c]"
+              }`}
+              title="ম্যানুয়াল এডিটিং প্যানেল (লেয়ার ও ইনস্পেক্টর) অন/অফ করুন"
+            >
+              <span>🛠️</span> {showSidebars ? "Hide Panels" : "Edit Panels"}
+            </button>
           </div>
         )}
 
@@ -1177,80 +1189,82 @@ export default function Home() {
         ) : (
           /* ── FIGMA STUDIO PRO WORKSPACE ── */
           <div className="flex-1 flex overflow-hidden">
-            {/* ── LEFT PANEL: LAYERS & CANVAS SETTINGS ── */}
-            <aside className="w-72 bg-[#0e101c] border-r border-[#1e2238] flex flex-col shrink-0">
-              {/* Header */}
-              <div className="p-3 border-b border-[#1e2238] flex items-center justify-between">
-                <span className="text-xs font-bold text-white flex items-center gap-2">
-                  <span>📑</span> Layers ({texts.length})
-                </span>
-                <button
-                  onClick={addNewTextLayer}
-                  className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-[11px] font-bold rounded-md transition-all flex items-center gap-1"
-                >
-                  <span>+</span> Add Text
-                </button>
-              </div>
-
-              {/* Layer Search */}
-              <div className="p-2 border-b border-[#1e2238]">
-                <input
-                  type="text"
-                  placeholder="সার্চ লেয়ার..."
-                  value={searchLayer}
-                  onChange={(e) => setSearchLayer(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white focus:outline-none focus:border-violet-500"
-                />
-              </div>
-
-              {/* Layers List */}
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                {filteredTexts.map((item, idx) => {
-                  const isSelected = item.id === selectedId;
-                  return (
-                    <div
-                      key={item.id}
-                      onClick={() => setSelectedId(item.id)}
-                      className={`px-2.5 py-2 rounded-lg cursor-pointer transition-all flex items-center justify-between gap-2 border text-xs ${
-                        isSelected
-                          ? "bg-violet-600/20 border-violet-500/60 text-white shadow-sm"
-                          : "bg-[#131626]/60 hover:bg-[#191d33] border-transparent text-slate-300"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-[10px] text-slate-500 shrink-0">
-                          #{idx + 1}
-                        </span>
-                        <span className="truncate font-medium">{item.text || "(Empty)"}</span>
-                      </div>
-                      <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                        {item.font_size}px
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Dominant Palette */}
-              <div className="p-3 border-t border-[#1e2238] bg-[#090b14]">
-                <div className="text-[11px] font-bold text-slate-400 mb-1.5">Color Palette</div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <div
-                    className="w-6 h-6 rounded-md border border-white/20 shadow-sm"
-                    style={{ backgroundColor: colors.dominant || "#ffffff" }}
-                    title={`Dominant: ${colors.dominant}`}
-                  />
-                  {(colors.palette || []).map((c, i) => (
-                    <div
-                      key={i}
-                      className="w-6 h-6 rounded-md border border-white/20 shadow-sm"
-                      style={{ backgroundColor: c }}
-                      title={c}
-                    />
-                  ))}
+            {/* ── LEFT PANEL: LAYERS & CANVAS SETTINGS (Shown only if Edit Panels toggled on) ── */}
+            {showSidebars && (
+              <aside className="w-72 bg-[#0e101c] border-r border-[#1e2238] flex flex-col shrink-0 animate-in slide-in-from-left duration-200">
+                {/* Header */}
+                <div className="p-3 border-b border-[#1e2238] flex items-center justify-between">
+                  <span className="text-xs font-bold text-white flex items-center gap-2">
+                    <span>📑</span> Layers ({texts.length})
+                  </span>
+                  <button
+                    onClick={addNewTextLayer}
+                    className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-[11px] font-bold rounded-md transition-all flex items-center gap-1"
+                  >
+                    <span>+</span> Add Text
+                  </button>
                 </div>
-              </div>
-            </aside>
+
+                {/* Layer Search */}
+                <div className="p-2 border-b border-[#1e2238]">
+                  <input
+                    type="text"
+                    placeholder="সার্চ লেয়ার..."
+                    value={searchLayer}
+                    onChange={(e) => setSearchLayer(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+
+                {/* Layers List */}
+                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                  {filteredTexts.map((item, idx) => {
+                    const isSelected = item.id === selectedId;
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => setSelectedId(item.id)}
+                        className={`px-2.5 py-2 rounded-lg cursor-pointer transition-all flex items-center justify-between gap-2 border text-xs ${
+                          isSelected
+                            ? "bg-violet-600/20 border-violet-500/60 text-white shadow-sm"
+                            : "bg-[#131626]/60 hover:bg-[#191d33] border-transparent text-slate-300"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <span className="truncate font-medium">{item.text || "(Empty)"}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                          {item.font_size}px
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Dominant Palette */}
+                <div className="p-3 border-t border-[#1e2238] bg-[#090b14]">
+                  <div className="text-[11px] font-bold text-slate-400 mb-1.5">Color Palette</div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <div
+                      className="w-6 h-6 rounded-md border border-white/20 shadow-sm"
+                      style={{ backgroundColor: colors.dominant || "#ffffff" }}
+                      title={`Dominant: ${colors.dominant}`}
+                    />
+                    {(colors.palette || []).map((c, i) => (
+                      <div
+                        key={i}
+                        className="w-6 h-6 rounded-md border border-white/20 shadow-sm"
+                        style={{ backgroundColor: c }}
+                        title={c}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </aside>
+            )}
 
             {/* ── CENTER CANVAS VIEW ── */}
             <section className="flex-1 bg-[#090a10] canvas-grid flex flex-col overflow-hidden relative">
@@ -1687,193 +1701,195 @@ export default function Home() {
               </div>
             </section>
 
-            {/* ── RIGHT PANEL: FIGMA PROPERTY INSPECTOR ── */}
-            <aside className="w-80 bg-[#0e101c] border-l border-[#1e2238] flex flex-col shrink-0">
-              <div className="p-3 border-b border-[#1e2238] flex items-center justify-between">
-                <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <span>🎨</span> Inspector
-                </span>
-                {selectedItem && (
-                  <span className="text-[10px] font-mono bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded border border-violet-500/30">
-                    #el-{selectedItem.id}
+            {/* ── RIGHT PANEL: FIGMA PROPERTY INSPECTOR (Shown only if Edit Panels toggled on) ── */}
+            {showSidebars && (
+              <aside className="w-80 bg-[#0e101c] border-l border-[#1e2238] flex flex-col shrink-0 animate-in slide-in-from-right duration-200">
+                <div className="p-3 border-b border-[#1e2238] flex items-center justify-between">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span>🎨</span> Inspector
                   </span>
-                )}
-              </div>
+                  {selectedItem && (
+                    <span className="text-[10px] font-mono bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded border border-violet-500/30">
+                      #el-{selectedItem.id}
+                    </span>
+                  )}
+                </div>
 
-              {selectedItem ? (
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {/* Live Text Editing */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                      Text Content (সরাসরি এডিট করুন)
-                    </label>
-                    <textarea
-                      rows={4}
-                      value={selectedItem.text || ""}
-                      onChange={(e) => updateSelectedText("text", e.target.value)}
-                      className="w-full px-3 py-2 bg-[#090a12] border border-[#242842] rounded-xl text-xs text-white focus:outline-none focus:border-violet-500 font-sans leading-relaxed"
-                    />
-                  </div>
-
-                  {/* Font Size & Weight */}
-                  <div className="grid grid-cols-2 gap-2">
+                {selectedItem ? (
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* Live Text Editing */}
                     <div>
                       <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                        Font Size (px)
+                        Text Content (সরাসরি এডিট করুন)
                       </label>
-                      <input
-                        type="number"
-                        min="8"
-                        max="120"
-                        value={selectedItem.font_size || 14}
-                        onChange={(e) => updateSelectedText("font_size", Number(e.target.value))}
-                        className="w-full px-2.5 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                      <textarea
+                        rows={4}
+                        value={selectedItem.text || ""}
+                        onChange={(e) => updateSelectedText("text", e.target.value)}
+                        className="w-full px-3 py-2 bg-[#090a12] border border-[#242842] rounded-xl text-xs text-white focus:outline-none focus:border-violet-500 font-sans leading-relaxed"
                       />
                     </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                        Weight
-                      </label>
-                      <select
-                        value={selectedItem.font_weight || "normal"}
-                        onChange={(e) => updateSelectedText("font_weight", e.target.value)}
-                        className="w-full px-2 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white focus:outline-none focus:border-violet-500"
-                      >
-                        <option value="normal">Normal (400)</option>
-                        <option value="500">Medium (500)</option>
-                        <option value="600">SemiBold (600)</option>
-                        <option value="bold">Bold (700)</option>
-                      </select>
-                    </div>
-                  </div>
 
-                  {/* Text Color */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                      Color (রং)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={selectedItem.color?.startsWith("#") ? selectedItem.color : "#000000"}
-                        onChange={(e) => updateSelectedText("color", e.target.value)}
-                        className="w-8 h-8 rounded-lg bg-transparent border border-slate-700 cursor-pointer"
-                      />
-                      <input
-                        type="text"
-                        value={selectedItem.color || "#000000"}
-                        onChange={(e) => updateSelectedText("color", e.target.value)}
-                        className="flex-1 px-2.5 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white font-mono focus:outline-none focus:border-violet-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Alignment */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                      Alignment
-                    </label>
-                    <div className="grid grid-cols-3 gap-1.5 bg-[#090a12] p-1 rounded-lg border border-[#242842]">
-                      {["left", "center", "right"].map((align) => (
-                        <button
-                          key={align}
-                          onClick={() => updateSelectedText("align", align)}
-                          className={`py-1 text-xs font-semibold rounded capitalize ${
-                            selectedItem.align === align
-                              ? "bg-violet-600 text-white"
-                              : "text-slate-400 hover:text-white"
-                          }`}
+                    {/* Font Size & Weight */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                          Font Size (px)
+                        </label>
+                        <input
+                          type="number"
+                          min="8"
+                          max="120"
+                          value={selectedItem.font_size || 14}
+                          onChange={(e) => updateSelectedText("font_size", Number(e.target.value))}
+                          className="w-full px-2.5 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                          Weight
+                        </label>
+                        <select
+                          value={selectedItem.font_weight || "normal"}
+                          onChange={(e) => updateSelectedText("font_weight", e.target.value)}
+                          className="w-full px-2 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white focus:outline-none focus:border-violet-500"
                         >
-                          {align}
-                        </button>
-                      ))}
+                          <option value="normal">Normal (400)</option>
+                          <option value="500">Medium (500)</option>
+                          <option value="600">SemiBold (600)</option>
+                          <option value="bold">Bold (700)</option>
+                        </select>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Spatial Box (X, Y, W, H) */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                      Coordinates (X, Y, Width, Height)
-                    </label>
-                    <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                      <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
-                        <span className="text-slate-500">X:</span>
+                    {/* Text Color */}
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                        Color (রং)
+                      </label>
+                      <div className="flex items-center gap-2">
                         <input
-                          type="number"
-                          value={selectedItem.box?.[0] || 0}
-                          onChange={(e) => {
-                            const b = [...(selectedItem.box || [0, 0, 100, 30])];
-                            b[0] = Number(e.target.value);
-                            updateSelectedText("box", b);
-                          }}
-                          className="w-full bg-transparent text-white focus:outline-none"
+                          type="color"
+                          value={selectedItem.color?.startsWith("#") ? selectedItem.color : "#000000"}
+                          onChange={(e) => updateSelectedText("color", e.target.value)}
+                          className="w-8 h-8 rounded-lg bg-transparent border border-slate-700 cursor-pointer"
                         />
-                      </div>
-                      <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
-                        <span className="text-slate-500">Y:</span>
                         <input
-                          type="number"
-                          value={selectedItem.box?.[1] || 0}
-                          onChange={(e) => {
-                            const b = [...(selectedItem.box || [0, 0, 100, 30])];
-                            b[1] = Number(e.target.value);
-                            updateSelectedText("box", b);
-                          }}
-                          className="w-full bg-transparent text-white focus:outline-none"
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
-                        <span className="text-slate-500">W:</span>
-                        <input
-                          type="number"
-                          value={selectedItem.box?.[2] || 100}
-                          onChange={(e) => {
-                            const b = [...(selectedItem.box || [0, 0, 100, 30])];
-                            b[2] = Number(e.target.value);
-                            updateSelectedText("box", b);
-                          }}
-                          className="w-full bg-transparent text-white focus:outline-none"
-                        />
-                      </div>
-                      <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
-                        <span className="text-slate-500">H:</span>
-                        <input
-                          type="number"
-                          value={selectedItem.box?.[3] || 30}
-                          onChange={(e) => {
-                            const b = [...(selectedItem.box || [0, 0, 100, 30])];
-                            b[3] = Number(e.target.value);
-                            updateSelectedText("box", b);
-                          }}
-                          className="w-full bg-transparent text-white focus:outline-none"
+                          type="text"
+                          value={selectedItem.color || "#000000"}
+                          onChange={(e) => updateSelectedText("color", e.target.value)}
+                          className="flex-1 px-2.5 py-1.5 bg-[#090a12] border border-[#242842] rounded-lg text-xs text-white font-mono focus:outline-none focus:border-violet-500"
                         />
                       </div>
                     </div>
-                  </div>
 
-                  {/* Actions: Duplicate & Delete */}
-                  <div className="pt-2 border-t border-[#1e2238] flex gap-2">
-                    <button
-                      onClick={duplicateSelectedLayer}
-                      className="flex-1 py-1.5 bg-[#171a2b] hover:bg-[#22263d] border border-[#2a2f4c] text-slate-200 rounded-lg text-xs font-semibold"
-                    >
-                      Duplicate
-                    </button>
-                    <button
-                      onClick={deleteSelectedLayer}
-                      className="flex-1 py-1.5 bg-red-950/40 hover:bg-red-900/50 border border-red-500/40 text-red-300 rounded-lg text-xs font-semibold"
-                    >
-                      Delete
-                    </button>
+                    {/* Alignment */}
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                        Alignment
+                      </label>
+                      <div className="grid grid-cols-3 gap-1.5 bg-[#090a12] p-1 rounded-lg border border-[#242842]">
+                        {["left", "center", "right"].map((align) => (
+                          <button
+                            key={align}
+                            onClick={() => updateSelectedText("align", align)}
+                            className={`py-1 text-xs font-semibold rounded capitalize ${
+                              selectedItem.align === align
+                                ? "bg-violet-600 text-white"
+                                : "text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            {align}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Spatial Box (X, Y, W, H) */}
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                        Coordinates (X, Y, Width, Height)
+                      </label>
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                        <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
+                          <span className="text-slate-500">X:</span>
+                          <input
+                            type="number"
+                            value={selectedItem.box?.[0] || 0}
+                            onChange={(e) => {
+                              const b = [...(selectedItem.box || [0, 0, 100, 30])];
+                              b[0] = Number(e.target.value);
+                              updateSelectedText("box", b);
+                            }}
+                            className="w-full bg-transparent text-white focus:outline-none"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
+                          <span className="text-slate-500">Y:</span>
+                          <input
+                            type="number"
+                            value={selectedItem.box?.[1] || 0}
+                            onChange={(e) => {
+                              const b = [...(selectedItem.box || [0, 0, 100, 30])];
+                              b[1] = Number(e.target.value);
+                              updateSelectedText("box", b);
+                            }}
+                            className="w-full bg-transparent text-white focus:outline-none"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
+                          <span className="text-slate-500">W:</span>
+                          <input
+                            type="number"
+                            value={selectedItem.box?.[2] || 100}
+                            onChange={(e) => {
+                              const b = [...(selectedItem.box || [0, 0, 100, 30])];
+                              b[2] = Number(e.target.value);
+                              updateSelectedText("box", b);
+                            }}
+                            className="w-full bg-transparent text-white focus:outline-none"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-[#090a12] px-2 py-1.5 rounded-lg border border-[#242842]">
+                          <span className="text-slate-500">H:</span>
+                          <input
+                            type="number"
+                            value={selectedItem.box?.[3] || 30}
+                            onChange={(e) => {
+                              const b = [...(selectedItem.box || [0, 0, 100, 30])];
+                              b[3] = Number(e.target.value);
+                              updateSelectedText("box", b);
+                            }}
+                            className="w-full bg-transparent text-white focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions: Duplicate & Delete */}
+                    <div className="pt-2 border-t border-[#1e2238] flex gap-2">
+                      <button
+                        onClick={duplicateSelectedLayer}
+                        className="flex-1 py-1.5 bg-[#171a2b] hover:bg-[#22263d] border border-[#2a2f4c] text-slate-200 rounded-lg text-xs font-semibold"
+                      >
+                        Duplicate
+                      </button>
+                      <button
+                        onClick={deleteSelectedLayer}
+                        className="flex-1 py-1.5 bg-red-950/40 hover:bg-red-900/50 border border-red-500/40 text-red-300 rounded-lg text-xs font-semibold"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-500 text-xs">
-                  <span className="text-2xl mb-2">👆</span>
-                  <span>যেকোনো টেক্সট লেয়ার সিলেক্ট করুন প্রপার্টি এডিট করার জন্য।</span>
-                </div>
-              )}
-            </aside>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-500 text-xs">
+                    <span className="text-2xl mb-2">👆</span>
+                    <span>যেকোনো টেক্সট লেয়ার সিলেক্ট করুন প্রপার্টি এডিট করার জন্য।</span>
+                  </div>
+                )}
+              </aside>
+            )}
           </div>
         )}
       </main>
