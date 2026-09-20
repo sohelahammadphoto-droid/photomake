@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
@@ -98,20 +98,51 @@ export default function Home() {
     setProgress(10);
 
     try {
-      setProcStep("📸 Colab এ image পাঠানো হচ্ছে...");
-      const formData = new FormData();
-      formData.append("file", file);
-
-      setProgress(25);
-      setProcStep("👁️ llava Vision AI analyze করছে...");
-
-      const response = await fetch(`${backendUrl}/analyze`, {
-        method: "POST",
-        body: formData,
+      setProcStep("📸 Image প্রসেস ও এনকোড হচ্ছে...");
+      const toBase64 = (f) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(f);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = (e) => reject(e);
       });
 
+      const base64Data = await toBase64(file);
+      setProgress(25);
+      setProcStep("👁️ Colab AI ব্যাকএন্ডে রিকোয়েস্ট পাঠানো হচ্ছে...");
+
+      const payload = {
+        image: base64Data,
+        filename: file.name
+      };
+
+      let response;
+      let usedProxy = false;
+
+      // 1. Try Direct Fetch first
+      try {
+        response = await fetch(`${backendUrl}/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (directErr) {
+        console.warn("Direct fetch error, falling back to server proxy:", directErr);
+        setProcStep("🔄 প্রক্সি কানেকশন দিয়ে রি-ট্রাই করা হচ্ছে...");
+        usedProxy = true;
+        // 2. Fallback to /api/proxy
+        response = await fetch("/api/proxy", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            targetUrl: `${backendUrl}/analyze`,
+            image: base64Data,
+            filename: file.name
+          }),
+        });
+      }
+
       setProgress(60);
-      setProcStep("💻 hermes3:8b HTML/CSS generate করছে...");
+      setProcStep("💻 Vision AI & hermes3:8b কোড জেনারেট করছে...");
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
@@ -119,20 +150,20 @@ export default function Home() {
       }
 
       const data = await response.json();
-      if (!data.success) throw new Error(data.error || "Unknown error");
+      if (!data.success) throw new Error(data.error || "Unknown AI error");
 
       setProgress(90);
       setProcStep("🎨 Figma-style Editor তৈরি হচ্ছে...");
 
       sessionStorage.setItem("editorData", JSON.stringify({
-        texts:         data.texts,
-        generatedHTML: data.generatedHTML,
-        filename:      data.filename,
-        imageDataUrl:  data.imageDataUrl,
-        dominantColor: data.dominantColor,
-        palette:       data.palette,
-        width:         data.width,
-        height:        data.height,
+        texts:         data.texts || [],
+        generatedHTML: data.generatedHTML || "",
+        filename:      data.filename || file.name,
+        imageDataUrl:  data.imageDataUrl || base64Data,
+        dominantColor: data.dominantColor || "#ffffff",
+        palette:       data.palette || [],
+        width:         data.width || 800,
+        height:        data.height || 600,
       }));
 
       setProgress(100);
