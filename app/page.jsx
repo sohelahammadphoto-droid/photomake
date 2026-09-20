@@ -58,30 +58,6 @@ export default function Home() {
     }
   }, []);
 
-  // ── Copy HuggingFace Space Files ──
-  const copyHfApp = async () => {
-    try {
-      const res = await fetch("/hfAppCode.json");
-      const data = await res.json();
-      await navigator.clipboard.writeText(data.code);
-      setCopiedApp(true);
-      setTimeout(() => setCopiedApp(false), 3000);
-    } catch {
-      alert("Copy failed. Please try again.");
-    }
-  };
-
-  const copyHfReqs = async () => {
-    try {
-      const res = await fetch("/hfReqs.json");
-      const data = await res.json();
-      await navigator.clipboard.writeText(data.code);
-      setCopiedReqs(true);
-      setTimeout(() => setCopiedReqs(false), 3000);
-    } catch {
-      alert("Copy failed. Please try again.");
-    }
-  };
 
   // ── Copy Colab Code from JSON ──
   const copyColabCode = async () => {
@@ -591,74 +567,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* ── HuggingFace 2-Minute Quick Guide Modal ── */}
-      {showGuide && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#141624] border border-[#2b304c] rounded-2xl max-w-lg w-full p-5 text-slate-200 shadow-2xl">
-            <div className="flex items-center justify-between mb-4 border-b border-[#23273c] pb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">🌟</span>
-                <h3 className="font-bold text-sm text-white">HuggingFace Space সেটআপ গাইড (২ মিনিট)</h3>
-              </div>
-              <button
-                onClick={() => setShowGuide(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold px-2 py-0.5 rounded"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs leading-relaxed">
-              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
-                <p className="font-bold text-violet-400 mb-1">ধাপ ১: HuggingFace-এ নতুন Space তৈরি করুন</p>
-                <p className="text-slate-300">
-                  <a href="https://huggingface.co/new-space" target="_blank" rel="noreferrer" className="text-fuchsia-400 underline font-semibold">
-                    huggingface.co/new-space ↗
-                  </a> এ যান। Space name দিন (যেমন: <code className="text-amber-300 font-mono">photomake-backend</code>) এবং Space SDK হিসেবে <code className="text-emerald-400 font-mono">Gradio</code> সিলেক্ট করুন (License: MIT)।
-                </p>
-              </div>
-
-              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
-                <p className="font-bold text-violet-400 mb-1">ধাপ ২: app.py পেস্ট করুন</p>
-                <p className="text-slate-300 mb-2">Space-এর "Files" ট্যাবে গিয়ে <code className="text-amber-300 font-mono">app.py</code> তৈরি করে কোড পেস্ট করে Commit দিন।</p>
-                <button
-                  onClick={copyHfApp}
-                  className="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded"
-                >
-                  {copiedApp ? "✅ Copied app.py!" : "📋 Copy app.py Code"}
-                </button>
-              </div>
-
-              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
-                <p className="font-bold text-violet-400 mb-1">ধাপ ৩: requirements.txt পেস্ট করুন</p>
-                <p className="text-slate-300 mb-2">একইভাবে "Add file" ক্লিক করে <code className="text-amber-300 font-mono">requirements.txt</code> তৈরি করুন এবং নিচের ডিপেনডেন্সিগুলো পেস্ট করুন।</p>
-                <button
-                  onClick={copyHfReqs}
-                  className="px-3 py-1 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold rounded"
-                >
-                  {copiedReqs ? "✅ Copied requirements!" : "📋 Copy requirements.txt"}
-                </button>
-              </div>
-
-              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
-                <p className="font-bold text-violet-400 mb-1">ধাপ ৪: URL কপি করে Validate চাপুন</p>
-                <p className="text-slate-300">
-                  Space-টি Running হলে উপরের ডানদিকের তিনটি ডট (⋮) ক্লিক করে "Embed this Space" বা ডিরেক্ট লিঙ্ক কপি করুন: <code className="text-emerald-300 font-mono">https://username-photomake-backend.hf.space</code>। সেই লিঙ্কটি Step 2 বক্সে দিয়ে Validate চাপুন!
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 pt-3 border-t border-[#23273c] flex justify-end">
-              <button
-                onClick={() => setShowGuide(false)}
-                className="px-4 py-1.5 bg-[#25293d] hover:bg-[#313650] text-white font-bold text-xs rounded-lg"
-              >
-                বুঝতে পেরেছি 👍
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       {/* 4. FIGMA STUDIO WORKSPACE (SIDE-BY-SIDE + SLIDER + DIFF)                 */}
