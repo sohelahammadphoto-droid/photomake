@@ -1,35 +1,49 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { orchestrateAutonomousTeam, DEFAULT_KEYS } from "./lib/multi_agent_team";
+import {
+  orchestrateAutonomousTeam,
+  discoverAndSelectFreeModels,
+  buildDeterministicHtml,
+  buildDeterministicTsx,
+  DEFAULT_KEYS,
+} from "./lib/multi_agent_team";
 
 const STORAGE_KEY_COLAB = "ai_image_editor_backend_url";
 const STORAGE_KEY_GEMINI = "geminiApiKey";
 const STORAGE_KEY_AGENT_KEYS = "ai_agent_team_keys";
 
 // ── Google Gemini Multimodal Vision System Prompt ──
-const SYSTEM_PROMPT = `You are a World-Class Document, Receipt, Deed, Form, and UI layout-to-pixel-perfect HTML/CSS compiler.
-Your task is purely technical OCR transcription, font matching, and spatial layout reconstruction:
-1. Detect and transcribe EVERY single text element visible in the image (regardless of language - Bengali, English, Arabic, numerals, symbols).
-2. For each element, produce:
+const SYSTEM_PROMPT = `You are a World-Class Document, Receipt, Certificate, Deed, Form, and UI layout-to-pixel-perfect code compiler.
+Your task is purely technical OCR transcription, font matching, table geometry, and spatial layout reconstruction:
+1. Detect and transcribe EVERY single text element visible in the image (Arabic, Bengali, English, numerals, symbols):
    - "id": unique string index ("0", "1", "2", ...)
    - "text": exact raw text string
    - "box": [x, y, width, height] integer coordinates relative to original canvas
    - "font_size": estimated font size in px
    - "font_weight": "normal", "medium", "600", or "bold"
-   - "color": hex color code (e.g. "#1e293b", "#000000")
+   - "color": hex color code (e.g. "#1e293b", "#000000", "#15803d")
    - "align": "left", "center", or "right"
-3. Measure the overall canvas width and height (e.g. 1000 x 1400).
+   - "direction": "ltr" or "rtl" (use "rtl" for Arabic or Hebrew text)
+2. Detect structural layout containers (colored header bars, table cells, divider lines, card borders):
+   - "id": unique container id ("box-0", "box-1", ...)
+   - "type": "table_header" | "table_cell" | "divider_line" | "card" | "shape"
+   - "box": [x, y, width, height] integer coordinates
+   - "bg": hex background color (e.g. "#e8f5e9", "#f1f5f9", or "transparent")
+   - "border": CSS border string (e.g. "1px solid #10b981", "1px solid #cbd5e1", or "none")
+   - "radius": border radius in px (0 for sharp tables)
+3. Measure overall canvas width and height (e.g. 1000 x 1400).
 4. Identify dominant background color and key palette colors.
-5. Generate a standalone, pixel-perfect HTML/CSS document where each text item has class="figma-element" and id="el-{id}" positioned absolutely matching exact coordinates.
-6. Return STRICTLY a valid JSON object without markdown fences, matching this schema:
+5. Return STRICTLY a valid JSON object without markdown fences, matching this schema:
 {
   "texts": [
-    { "id": "0", "text": "...", "box": [50, 40, 300, 30], "font_size": 24, "font_weight": "bold", "color": "#111827", "align": "left" }
+    { "id": "0", "text": "...", "box": [50, 40, 300, 30], "font_size": 24, "font_weight": "bold", "color": "#111827", "align": "left", "direction": "ltr" }
+  ],
+  "containers": [
+    { "id": "box-0", "type": "table_header", "box": [50, 20, 900, 45], "bg": "#e8f5e9", "border": "1px solid #10b981", "radius": 4 }
   ],
   "canvas": { "width": 1000, "height": 1400 },
-  "colors": { "dominant": "#ffffff", "palette": ["#000000", "#1e3a8a", "#dc2626"] },
-  "html": "<!DOCTYPE html><html><head><meta charset='utf-8'><link href='https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600;700&family=Inter:wght@400;600;700&display=swap' rel='stylesheet'><style>body{margin:0;font-family:'Hind Siliguri','Inter',sans-serif;position:relative;background:#ffffff;}.figma-element{position:absolute;box-sizing:border-box;white-space:pre-wrap;cursor:text;}</style></head><body>...</body></html>"
+  "colors": { "dominant": "#ffffff", "palette": ["#000000", "#1e3a8a", "#15803d"] }
 }`;
 
 export default function Home() {
@@ -53,6 +67,11 @@ export default function Home() {
   const [colabUrl, setColabUrl] = useState("");
   const [urlStatus, setUrlStatus] = useState("idle"); // "idle" | "checking" | "ok" | "error"
 
+  // AI Model Discovery State
+  const [discoveredRoster, setDiscoveredRoster] = useState([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [showRosterModal, setShowRosterModal] = useState(false);
+
   // Image & Processing
   const [file, setFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -64,7 +83,9 @@ export default function Home() {
 
   // Studio Results
   const [texts, setTexts] = useState([]);
+  const [containers, setContainers] = useState([]);
   const [generatedHtml, setGeneratedHtml] = useState("");
+  const [generatedTsx, setGeneratedTsx] = useState("");
   const [canvasInfo, setCanvasInfo] = useState({ width: 1000, height: 1400 });
   const [colors, setColors] = useState({ dominant: "#ffffff", palette: [] });
   const [isLiveBuilding, setIsLiveBuilding] = useState(false);
@@ -85,7 +106,7 @@ export default function Home() {
   const [showBoxes, setShowBoxes] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [searchLayer, setSearchLayer] = useState("");
-  const [codeTab, setCodeTab] = useState("html"); // "html" | "json"
+  const [codeTab, setCodeTab] = useState("tsx"); // "tsx" | "html" | "json"
   const [toastMessage, setToastMessage] = useState("");
 
   const inputRef = useRef(null);
@@ -425,22 +446,29 @@ export default function Home() {
         result = await colabRes.json();
       }
 
-      setProgressStage("Synthesizing Pixel-Perfect Figma Studio...");
+      setProgressStage("Synthesizing Pixel-Perfect Same-to-Same Clone...");
 
       const parsedTexts = result.texts || [];
+      const parsedContainers = result.containers || [];
       const parsedCanvas = result.canvas || { width: imageDimensions.width || 1000, height: imageDimensions.height || 1400 };
       const parsedColors = result.colors || { dominant: "#ffffff", palette: [] };
-      let parsedHtml = result.html || result.generatedHTML || "";
+      let parsedHtml = result.html || "";
+      let parsedTsx = result.tsx || "";
 
-      // Ensure HTML exists
-      if (!parsedHtml && parsedTexts.length > 0) {
-        parsedHtml = buildHtmlFromTexts(parsedTexts, parsedCanvas, parsedColors);
+      // Ensure HTML & TSX exist
+      if (!parsedHtml) {
+        parsedHtml = buildDeterministicHtml(parsedTexts, parsedContainers, parsedCanvas, parsedColors);
+      }
+      if (!parsedTsx) {
+        parsedTsx = buildDeterministicTsx(parsedTexts, parsedContainers, parsedCanvas, parsedColors);
       }
 
       // Open Studio Canvas immediately
       setCanvasInfo(parsedCanvas);
       setColors(parsedColors);
+      setContainers(parsedContainers);
       setGeneratedHtml(parsedHtml);
+      setGeneratedTsx(parsedTsx);
       setTexts([]);
       setIsLiveBuilding(true);
 
@@ -480,7 +508,7 @@ export default function Home() {
         setSelectedId(parsedTexts[0].id);
       }
 
-      showToast(`সফলভাবে কনভার্ট হয়েছে! ${parsedTexts.length}টি এডিটেবল টেক্সট লেয়ার তৈরি হয়েছে 🎉`);
+      showToast(`সফলভাবে সেইম-টু-সেইম কনভার্ট হয়েছে! ${parsedContainers.length}টি টেবিল/শেপ ও ${parsedTexts.length}টি টেক্সট তৈরি হয়েছে 🎉`);
     } catch (err) {
       console.error("Conversion Error:", err);
       setError(err.message || "কনভার্ট করার সময় কোনো সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।");
@@ -491,81 +519,39 @@ export default function Home() {
     }
   };
 
-  // ── Helper: Reconstruct HTML from Texts ──
-  const buildHtmlFromTexts = (textList, canvas, colorData) => {
-    const elementsHtml = textList
-      .map((t) => {
-        const [x, y, w, h] = t.box || [0, 0, 100, 30];
-        return `<div id="el-${t.id}" class="figma-element" style="left:${x}px;top:${y}px;width:${w}px;min-height:${h}px;font-size:${t.font_size || 14}px;font-weight:${t.font_weight || "normal"};color:${t.color || "#000000"};text-align:${t.align || "left"};">${escapeHtml(t.text)}</div>`;
-      })
-      .join("\n    ");
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Editable Image Clone</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 0;
-      font-family: 'Hind Siliguri', 'Inter', sans-serif;
-      background: ${colorData?.dominant || "#ffffff"};
-      width: ${canvas.width}px;
-      height: ${canvas.height}px;
-      position: relative;
-      overflow: hidden;
+  // ── AI Models Auto-Fetch & Discovery ──
+  const handleFetchModels = async () => {
+    setIsDiscovering(true);
+    showToast("AI Models স্ক্যান ও অটো-সিলেক্ট করা হচ্ছে... ⚡");
+    try {
+      const roster = await discoverAndSelectFreeModels({ ...agentKeys, gemini: geminiKey });
+      setDiscoveredRoster(roster);
+      setShowRosterModal(true);
+      showToast("সফলভাবে AI মডেল টিম সিলেক্ট করা হয়েছে! ✅");
+    } catch (e) {
+      console.error("Discovery error:", e);
+      showToast("মডেল স্ক্যান ব্যর্থ হয়েছে। ইন্টারনেট সংযোগ চেক করুন।");
+    } finally {
+      setIsDiscovering(false);
     }
-    .figma-element {
-      position: absolute;
-      white-space: pre-wrap;
-      word-break: break-word;
-      line-height: 1.35;
-      user-select: text;
-    }
-  </style>
-</head>
-<body>
-  <div id="canvas-root" style="position:relative;width:100%;height:100%;">
-    ${elementsHtml}
-  </div>
-</body>
-</html>`;
-  };
-
-  const escapeHtml = (str) => {
-    return (str || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
   };
 
   // ── Update Selected Text Field in Live State ──
   const updateSelectedText = (key, val) => {
     if (selectedId === null) return;
-    setTexts((prev) =>
-      prev.map((item) => {
+    setTexts((prev) => {
+      const updated = prev.map((item) => {
         if (item.id === selectedId) {
-          const updated = { ...item, [key]: val };
-          return updated;
+          return { ...item, [key]: val };
         }
         return item;
-      })
-    );
-
-    // Rebuild HTML dynamically
-    setTimeout(() => {
-      setTexts((curr) => {
-        setGeneratedHtml(buildHtmlFromTexts(curr, canvasInfo, colors));
-        return curr;
       });
-    }, 50);
+
+      // Rebuild HTML & TSX dynamically
+      setGeneratedHtml(buildDeterministicHtml(updated, containers, canvasInfo, colors));
+      setGeneratedTsx(buildDeterministicTsx(updated, containers, canvasInfo, colors));
+      return updated;
+    });
   };
 
   // ── Delete Layer ──
@@ -574,7 +560,8 @@ export default function Home() {
     const remaining = texts.filter((t) => t.id !== selectedId);
     setTexts(remaining);
     setSelectedId(remaining.length > 0 ? remaining[0].id : null);
-    setGeneratedHtml(buildHtmlFromTexts(remaining, canvasInfo, colors));
+    setGeneratedHtml(buildDeterministicHtml(remaining, containers, canvasInfo, colors));
+    setGeneratedTsx(buildDeterministicTsx(remaining, containers, canvasInfo, colors));
     showToast("লেয়ার মুছে ফেলা হয়েছে");
   };
 
@@ -594,7 +581,8 @@ export default function Home() {
     const updated = [...texts, newElement];
     setTexts(updated);
     setSelectedId(newId);
-    setGeneratedHtml(buildHtmlFromTexts(updated, canvasInfo, colors));
+    setGeneratedHtml(buildDeterministicHtml(updated, containers, canvasInfo, colors));
+    setGeneratedTsx(buildDeterministicTsx(updated, containers, canvasInfo, colors));
     showToast("লেয়ার ডুপ্লিকেট করা হয়েছে");
   };
 
@@ -609,15 +597,29 @@ export default function Home() {
       font_weight: "600",
       color: "#000000",
       align: "left",
+      direction: "ltr",
     };
     const updated = [...texts, newElement];
     setTexts(updated);
     setSelectedId(newId);
-    setGeneratedHtml(buildHtmlFromTexts(updated, canvasInfo, colors));
+    setGeneratedHtml(buildDeterministicHtml(updated, containers, canvasInfo, colors));
+    setGeneratedTsx(buildDeterministicTsx(updated, containers, canvasInfo, colors));
     showToast("নতুন টেক্সট লেয়ার যোগ করা হয়েছে");
   };
 
   // ── Export Tools ──
+  const downloadTsxFile = () => {
+    if (!generatedTsx) return;
+    const blob = new Blob([generatedTsx], { type: "text/typescript;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `DocumentClone_${Date.now()}.tsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(".tsx React কম্পোনেন্ট সফলভাবে ডাউনলোড হয়েছে! ⚛️");
+  };
+
   const downloadHtmlFile = () => {
     if (!generatedHtml) return;
     const blob = new Blob([generatedHtml], { type: "text/html;charset=utf-8" });
@@ -773,13 +775,21 @@ export default function Home() {
 
               {/* Action Buttons */}
               <button
+                onClick={downloadTsxFile}
+                className="px-3 py-1.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:opacity-90 text-white font-bold text-xs rounded-lg shadow-md shadow-blue-600/20 flex items-center gap-1.5 transition-all"
+                title="React .tsx এবং Tailwind CSS কম্পোনেন্ট ডাউনলোড করুন"
+              >
+                <span>⚛️</span> Download .tsx
+              </button>
+              <button
                 onClick={downloadHtmlFile}
                 className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:opacity-90 text-white font-bold text-xs rounded-lg shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition-all"
+                title="স্ট্যান্ডঅ্যালন HTML ফাইল ডাউনলোড করুন"
               >
                 <span>💾</span> Download HTML
               </button>
               <button
-                onClick={() => copyToClipboard(generatedHtml, "HTML")}
+                onClick={() => copyToClipboard(codeTab === "tsx" ? generatedTsx : generatedHtml, codeTab === "tsx" ? ".tsx React Code" : "HTML")}
                 className="px-3 py-1.5 bg-[#171a29] hover:bg-[#202438] border border-[#2a2f4c] text-slate-200 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-all"
               >
                 <span>📋</span> Copy Code
@@ -787,7 +797,9 @@ export default function Home() {
               <button
                 onClick={() => {
                   setTexts([]);
+                  setContainers([]);
                   setGeneratedHtml("");
+                  setGeneratedTsx("");
                   setFile(null);
                   setImagePreview(null);
                   setError(null);
@@ -913,21 +925,43 @@ export default function Home() {
             </div>
 
             {engine === "multi-agent" ? (
-              <div className="flex items-center justify-between gap-2 my-1 bg-[#0b0d14] p-2 rounded-lg border border-[#23273e]">
-                <div className="text-[10px] text-slate-300 space-y-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span>👁️ Vision: Gemini / Pixtral</span>
+              <div className="flex flex-col gap-1.5 my-1 bg-[#0b0d14] p-2 rounded-lg border border-[#23273e]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-slate-300 space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span>👁️ Vision: Google / Pixtral</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-emerald-400 font-mono">
+                      <span>⚡ Coder: Groq (540 tok/s)</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 text-emerald-400 font-mono">
-                    <span>⚡ Coder: Groq LPU (540 tok/s)</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={handleFetchModels}
+                      disabled={isDiscovering}
+                      className="px-2.5 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black font-extrabold text-xs rounded-lg shadow-md shadow-amber-500/20 flex items-center gap-1 transition-all"
+                      title="ফ্রি AI মডেলগুলো স্ক্যান ও অটো-সিলেক্ট করুন"
+                    >
+                      <span>⚡</span>
+                      <span>{isDiscovering ? "Scanning..." : "AI Fetch Models"}</span>
+                    </button>
+                    <button
+                      onClick={() => setShowKeyModal(true)}
+                      className="px-2 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-xs font-bold rounded-lg transition-all whitespace-nowrap"
+                    >
+                      ⚙️ Keys
+                    </button>
                   </div>
                 </div>
-                <button
-                  onClick={() => setShowKeyModal(true)}
-                  className="px-2.5 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-xs font-bold rounded-lg transition-all whitespace-nowrap"
-                >
-                  ⚙️ Keys & Team
-                </button>
+                {discoveredRoster.length > 0 && (
+                  <button
+                    onClick={() => setShowRosterModal(true)}
+                    className="w-full text-left bg-[#141727] hover:bg-[#1a1e33] px-2 py-1 rounded border border-emerald-500/30 flex items-center justify-between text-[10px] text-emerald-300 transition-colors"
+                  >
+                    <span className="truncate">✨ Active: {discoveredRoster.length} Specialized Models Assigned</span>
+                    <span className="font-bold underline text-violet-300">View Roster →</span>
+                  </button>
+                )}
               </div>
             ) : (
               <div className="flex gap-1.5 my-1">
@@ -1315,7 +1349,7 @@ export default function Home() {
                     {/* Right: Editable HTML Render */}
                     <div className="flex flex-col items-center">
                       <div className="text-xs font-bold text-violet-400 mb-2 flex items-center gap-1.5">
-                        <span>✨</span> Pixel-Perfect Editable Figma Clone
+                        <span>✨</span> Pixel-Perfect Same-to-Same Clone (Tables + Shapes + Texts)
                       </div>
                       <div
                         className="relative rounded-xl overflow-hidden border border-violet-500/40 shadow-2xl"
@@ -1325,14 +1359,37 @@ export default function Home() {
                           backgroundColor: colors.dominant || "#ffffff",
                         }}
                       >
+                        {/* ── 1. Structural Containers: Table Headers, Cells, Divider Lines, Borders ── */}
+                        {containers.map((c) => {
+                          const [x, y, w, h] = c.box || [0, 0, 100, 30];
+                          return (
+                            <div
+                              key={c.id}
+                              id={c.id}
+                              className="absolute pointer-events-none box-border"
+                              style={{
+                                left: x,
+                                top: y,
+                                width: w,
+                                height: h,
+                                backgroundColor: c.bg || "transparent",
+                                border: c.border || "none",
+                                borderRadius: `${c.radius || 0}px`,
+                              }}
+                            />
+                          );
+                        })}
+
+                        {/* ── 2. Editable Typography Layers ── */}
                         {texts.map((t) => {
                           const [x, y, w, h] = t.box || [0, 0, 100, 30];
                           const isSelected = t.id === selectedId;
                           return (
                             <div
                               key={t.id}
+                              id={`el-${t.id}`}
                               onClick={() => setSelectedId(t.id)}
-                              className={`absolute cursor-text select-text transition-all leading-snug ${
+                              className={`absolute cursor-text select-text transition-all leading-snug box-border ${
                                 isSelected
                                   ? "ring-2 ring-violet-500 ring-offset-1 ring-offset-black/50 z-20"
                                   : "hover:outline hover:outline-1 hover:outline-violet-400/60 z-10"
@@ -1346,7 +1403,8 @@ export default function Home() {
                                 fontWeight: t.font_weight || "normal",
                                 color: t.color || "#000000",
                                 textAlign: t.align || "left",
-                                fontFamily: "'Hind Siliguri', 'Inter', sans-serif",
+                                direction: t.direction === "rtl" ? "rtl" : "ltr",
+                                fontFamily: "'Cairo', 'Hind Siliguri', 'Inter', sans-serif",
                                 whiteSpace: "pre-wrap",
                               }}
                             >
@@ -1430,12 +1488,33 @@ export default function Home() {
                         backgroundColor: colors.dominant || "#ffffff",
                       }}
                     >
+                      {/* Containers */}
+                      {containers.map((c) => {
+                        const [x, y, w, h] = c.box || [0, 0, 100, 30];
+                        return (
+                          <div
+                            key={c.id}
+                            className="absolute pointer-events-none box-border"
+                            style={{
+                              left: x,
+                              top: y,
+                              width: w,
+                              height: h,
+                              backgroundColor: c.bg || "transparent",
+                              border: c.border || "none",
+                              borderRadius: `${c.radius || 0}px`,
+                            }}
+                          />
+                        );
+                      })}
+
+                      {/* Texts */}
                       {texts.map((t) => {
                         const [x, y, w, h] = t.box || [0, 0, 100, 30];
                         return (
                           <div
                             key={t.id}
-                            className="absolute"
+                            className="absolute box-border leading-snug"
                             style={{
                               left: x,
                               top: y,
@@ -1445,7 +1524,8 @@ export default function Home() {
                               fontWeight: t.font_weight || "normal",
                               color: t.color || "#000000",
                               textAlign: t.align || "left",
-                              fontFamily: "'Hind Siliguri', 'Inter', sans-serif",
+                              direction: t.direction === "rtl" ? "rtl" : "ltr",
+                              fontFamily: "'Cairo', 'Hind Siliguri', 'Inter', sans-serif",
                               whiteSpace: "pre-wrap",
                             }}
                           >
@@ -1490,12 +1570,33 @@ export default function Home() {
                         backgroundColor: colors.dominant || "#ffffff",
                       }}
                     >
+                      {/* Containers */}
+                      {containers.map((c) => {
+                        const [x, y, w, h] = c.box || [0, 0, 100, 30];
+                        return (
+                          <div
+                            key={c.id}
+                            className="absolute pointer-events-none box-border"
+                            style={{
+                              left: x,
+                              top: y,
+                              width: w,
+                              height: h,
+                              backgroundColor: c.bg || "transparent",
+                              border: c.border || "none",
+                              borderRadius: `${c.radius || 0}px`,
+                            }}
+                          />
+                        );
+                      })}
+
+                      {/* Texts */}
                       {texts.map((t) => {
                         const [x, y, w, h] = t.box || [0, 0, 100, 30];
                         return (
                           <div
                             key={t.id}
-                            className="absolute"
+                            className="absolute box-border leading-snug"
                             style={{
                               left: x,
                               top: y,
@@ -1505,7 +1606,8 @@ export default function Home() {
                               fontWeight: t.font_weight || "normal",
                               color: t.color || "#000000",
                               textAlign: t.align || "left",
-                              fontFamily: "'Hind Siliguri', 'Inter', sans-serif",
+                              direction: t.direction === "rtl" ? "rtl" : "ltr",
+                              fontFamily: "'Cairo', 'Hind Siliguri', 'Inter', sans-serif",
                               whiteSpace: "pre-wrap",
                             }}
                           >
@@ -1519,41 +1621,65 @@ export default function Home() {
 
                 {/* 4. CODE VIEW */}
                 {viewMode === "code" && (
-                  <div className="w-full max-w-4xl h-full flex flex-col bg-[#0f111c] rounded-2xl border border-[#232742] overflow-hidden shadow-2xl">
-                    <div className="bg-[#141726] px-4 py-2.5 border-b border-[#232742] flex items-center justify-between">
+                  <div className="w-full max-w-5xl h-full flex flex-col bg-[#0f111c] rounded-2xl border border-[#232742] overflow-hidden shadow-2xl">
+                    <div className="bg-[#141726] px-4 py-2.5 border-b border-[#232742] flex items-center justify-between flex-wrap gap-2">
                       <div className="flex gap-2">
                         <button
-                          onClick={() => setCodeTab("html")}
-                          className={`px-3 py-1 text-xs font-bold rounded-lg ${
-                            codeTab === "html" ? "bg-violet-600 text-white" : "text-slate-400 hover:text-white"
+                          onClick={() => setCodeTab("tsx")}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
+                            codeTab === "tsx"
+                              ? "bg-blue-600 text-white shadow-md shadow-blue-600/30"
+                              : "text-slate-400 hover:text-white"
                           }`}
                         >
-                          index.html
+                          <span>⚛️</span> Document.tsx (React + Tailwind)
+                        </button>
+                        <button
+                          onClick={() => setCodeTab("html")}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
+                            codeTab === "html"
+                              ? "bg-violet-600 text-white shadow-md shadow-violet-600/30"
+                              : "text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          <span>🌐</span> index.html
                         </button>
                         <button
                           onClick={() => setCodeTab("json")}
-                          className={`px-3 py-1 text-xs font-bold rounded-lg ${
-                            codeTab === "json" ? "bg-violet-600 text-white" : "text-slate-400 hover:text-white"
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
+                            codeTab === "json"
+                              ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30"
+                              : "text-slate-400 hover:text-white"
                           }`}
                         >
-                          elements.json
+                          <span>📦</span> elements.json
                         </button>
                       </div>
-                      <button
-                        onClick={() =>
-                          copyToClipboard(
-                            codeTab === "html" ? generatedHtml : JSON.stringify(texts, null, 2),
-                            codeTab.toUpperCase()
-                          )
-                        }
-                        className="px-3 py-1 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-xs font-bold rounded-lg"
-                      >
-                        Copy {codeTab.toUpperCase()}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() =>
+                            copyToClipboard(
+                              codeTab === "tsx"
+                                ? generatedTsx
+                                : codeTab === "html"
+                                ? generatedHtml
+                                : JSON.stringify({ canvas: canvasInfo, colors, containers, texts }, null, 2),
+                              codeTab === "tsx" ? ".tsx React Code" : codeTab.toUpperCase()
+                            )
+                          }
+                          className="px-3 py-1.5 bg-violet-600/30 hover:bg-violet-600/50 border border-violet-500/40 text-violet-200 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5"
+                        >
+                          <span>📋</span> Copy {codeTab.toUpperCase()}
+                        </button>
+                      </div>
                     </div>
                     <div className="flex-1 p-4 overflow-auto">
                       <pre className="text-xs font-mono text-emerald-300 leading-relaxed whitespace-pre-wrap selection:bg-violet-600/40">
-                        {codeTab === "html" ? generatedHtml : JSON.stringify(texts, null, 2)}
+                        {codeTab === "tsx"
+                          ? generatedTsx
+                          : codeTab === "html"
+                          ? generatedHtml
+                          : JSON.stringify({ canvas: canvasInfo, colors, containers, texts }, null, 2)}
                       </pre>
                     </div>
                   </div>
@@ -1844,17 +1970,27 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between mt-5 pt-3 border-t border-[#232740]">
-              <button
-                onClick={() => {
-                  setAgentKeys(DEFAULT_KEYS);
-                  localStorage.removeItem(STORAGE_KEY_AGENT_KEYS);
-                  showToast("Default AI Keys রিস্টোর করা হয়েছে!");
-                }}
-                className="text-xs text-slate-400 hover:text-white"
-              >
-                Reset to Defaults
-              </button>
+            <div className="flex items-center justify-between mt-5 pt-3 border-t border-[#232740] flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setAgentKeys(DEFAULT_KEYS);
+                    localStorage.removeItem(STORAGE_KEY_AGENT_KEYS);
+                    showToast("Default AI Keys রিস্টোর করা হয়েছে!");
+                  }}
+                  className="text-xs text-slate-400 hover:text-white"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={handleFetchModels}
+                  disabled={isDiscovering}
+                  className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all"
+                >
+                  <span>⚡</span>
+                  <span>{isDiscovering ? "Scanning..." : "AI Fetch Models"}</span>
+                </button>
+              </div>
               <button
                 onClick={() => {
                   localStorage.setItem(STORAGE_KEY_AGENT_KEYS, JSON.stringify(agentKeys));
@@ -1864,6 +2000,116 @@ export default function Home() {
                 className="px-4 py-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-600/30 hover:opacity-95"
               >
                 Save Team Keys 💾
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── AI MODELS SELECTION & ROSTER MODAL ── */}
+      {showRosterModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          <div className="bg-[#101322] border border-[#2c3254] rounded-2xl w-full max-w-2xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between mb-4 border-b border-[#232742] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-xl shadow-lg shadow-amber-500/20">
+                  ⚡
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    Free AI Models Selection Board
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      Live Dynamic Roster
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    API কীগুলোর ভেতরে থাকা সেরা ফ্রি মডেলগুলো স্বয়ংক্রিয়ভাবে শনাক্ত ও কাজের দায়িত্ব ভাগ করা হয়েছে:
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRosterModal(false)}
+                className="text-slate-400 hover:text-white text-lg p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              {(discoveredRoster.length > 0 ? discoveredRoster : [
+                {
+                  role: "👁️ Vision Specialist (ছবি ও টেবিল লেআউট ডিটেকশন)",
+                  model: activeModel || "gemini-2.5-flash",
+                  provider: "Google AI Studio",
+                  task: "ডকুমেন্টের প্রতিটি টেবিল গ্রিড, হেডার কালার বক্স এবং বাংলা/আরবি/ইংরেজি লেখা ডিটেক্ট করে",
+                  badge: "0% Censored · Vision",
+                  status: keyStatus === "ok" ? "Connected ✅" : "Default Ready",
+                },
+                {
+                  role: "⚡ Code Architect (React .tsx & Tailwind কোডার)",
+                  model: "openai/gpt-oss-120b",
+                  provider: "Groq LPU",
+                  task: "৫৪০ টোকেন/সেকেন্ড গতিতে প্রোডাকশন-রেডি React .tsx এবং আধুনিক Tailwind CSS তৈরি করে",
+                  badge: "540 tok/s · Ultra Fast",
+                  status: "Pre-Configured ✅",
+                },
+                {
+                  role: "📐 Grid & Shape Master (টেবিল, লাইন ও বক্স রিকনস্ট্রাকশন)",
+                  model: "qwen/qwen3.8-27b",
+                  provider: "Groq LPU",
+                  task: "ডকুমেন্টের টেবিল সেল, গ্রিন হেডার বার, বর্ডার লাইন নিখুঁত পিক্সেল-বাই-পিক্সেল বসায়",
+                  badge: "Shape Vector Specialist",
+                  status: "Active ✅",
+                },
+                {
+                  role: "🧠 Reasoning Auditor (যুক্তাক্ষর ও কোয়ালিটি রিভিউ)",
+                  model: "deepseek/deepseek-r1:free",
+                  provider: "OpenRouter Free",
+                  task: "ডিপ রিজনিং দিয়ে টেক্সট ওভারল্যাপ, আরবি/বাংলা যুক্তাক্ষর ও কনভার্সন শতভাগ চেক করে",
+                  badge: "DeepSeek R1 · Free",
+                  status: "Ready ✅",
+                },
+              ]).map((item, idx) => (
+                <div
+                  key={idx}
+                  className="bg-[#15192c] border border-[#262c48] hover:border-violet-500/50 p-3.5 rounded-xl transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3 mb-1.5">
+                    <div>
+                      <span className="text-xs font-bold text-white block">{item.role}</span>
+                      <span className="text-[11px] font-mono text-violet-400 font-semibold">
+                        {item.model}
+                      </span>
+                      <span className="text-[11px] text-slate-400 ml-2">via {item.provider}</span>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20 whitespace-nowrap">
+                        {item.badge}
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-mono">{item.status}</span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-300 bg-[#0c0e18] p-2 rounded-lg border border-[#1e2338]">
+                    🎯 <strong className="text-white">দায়িত্ব:</strong> {item.task}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between mt-5 pt-3 border-t border-[#232742]">
+              <button
+                onClick={handleFetchModels}
+                disabled={isDiscovering}
+                className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 text-black font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center gap-1.5 transition-all"
+              >
+                <span>🔄</span>
+                <span>{isDiscovering ? "Scanning API Providers..." : "Re-Scan & Re-Select Models"}</span>
+              </button>
+              <button
+                onClick={() => setShowRosterModal(false)}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-600/30 transition-all"
+              >
+                Got It, Ready to Convert 🚀
               </button>
             </div>
           </div>
