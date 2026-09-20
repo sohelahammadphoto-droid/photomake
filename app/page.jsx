@@ -1,66 +1,86 @@
 "use client";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useRouter } from "next/navigation";
-
 
 const STORAGE_KEY = "colabBackendUrl";
 
 export default function Home() {
-  // Step state: 1 = copy colab code, 2 = validate url, 3 = upload image
-  const [step,       setStep]       = useState(1);
-  const [copied,     setCopied]     = useState(false);
+  // ── Connection & Upload State ──
   const [backendUrl, setBackendUrl] = useState("");
-  const [urlStatus,  setUrlStatus]  = useState("idle"); // idle|checking|ok|error
+  const [urlStatus,  setUrlStatus]  = useState("idle"); // idle | checking | ok | error
   const [file,       setFile]       = useState(null);
   const [preview,    setPreview]    = useState(null);
   const [dragging,   setDragging]   = useState(false);
-  const [processing, setProcessing] = useState(false);
-  const [procStep,   setProcStep]   = useState("");
-  const [progress,   setProgress]   = useState(0);
+  const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState("");
-  const inputRef = useRef(null);
-  const router   = useRouter();
+  const [copiedCode, setCopiedCode] = useState(false);
 
-  // Restore saved URL
+  // ── Live Progress Stream Logs ──
+  const [logs,       setLogs]       = useState([]);
+  const [elapsed,    setElapsed]    = useState(0);
+
+  // ── Result & Figma Studio State ──
+  const [studioReady, setStudioReady] = useState(false);
+  const [texts,       setTexts]       = useState([]);
+  const [genHTML,     setGenHTML]     = useState("");
+  const [filename,    setFilename]    = useState("design");
+  const [imgSrc,      setImgSrc]      = useState("");
+  const [canvasW,     setCanvasW]     = useState(1000);
+  const [canvasH,     setCanvasH]     = useState(1400);
+  const [dominantColor,setDominantColor] = useState("#ffffff");
+  const [palette,     setPalette]     = useState([]);
+  const [curTexts,    setCurTexts]    = useState({});
+  const [selectedId,  setSelectedId]  = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Figma Canvas View Modes: 'side-by-side' | 'split-slider' | 'overlay' | 'clone-only'
+  const [viewMode,    setViewMode]    = useState("side-by-side");
+  const [sliderPos,   setSliderPos]   = useState(50);
+  const [overlayOpacity, setOverlayOpacity] = useState(50);
+  const [zoom,        setZoom]        = useState(100);
+  const [isCopied,    setIsCopied]    = useState(false);
+
+  const inputRef    = useRef(null);
+  const frameRef    = useRef(null);
+  const splitRef    = useRef(null);
+  const isDragging  = useRef(false);
+
+  // Restore saved Colab URL
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       setBackendUrl(saved);
-      setUrlStatus("ok");
-      setStep(3);
+      testConnection(saved);
     }
   }, []);
 
-  // ── Copy Colab Code ──
+  // ── Copy Colab Code from JSON ──
   const copyColabCode = async () => {
     try {
       const res = await fetch("/colabCode.json");
       const data = await res.json();
       await navigator.clipboard.writeText(data.code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 3000);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 3000);
     } catch {
-      setCopied(false);
-      alert("Copy failed. Please try again.");
+      alert("Colab code copy failed. Please refresh and try again.");
     }
   };
 
-  // ── Test Colab URL ──
-  const testUrl = async () => {
-    const url = backendUrl.trim().replace(/\/$/, "");
-    if (!url) return;
+  // ── Test Colab Ping ──
+  const testConnection = async (url) => {
+    const cleanUrl = (url || backendUrl).trim().replace(/\/$/, "");
+    if (!cleanUrl) return;
     setUrlStatus("checking");
     setError("");
     try {
-      const r = await fetch(`${url}/ping`, {
-        signal: AbortSignal.timeout(10000),
+      const r = await fetch(`${cleanUrl}/ping`, {
+        signal: AbortSignal.timeout(8000),
       });
       const d = await r.json();
       if (d.pong) {
         setUrlStatus("ok");
-        localStorage.setItem(STORAGE_KEY, url);
-        setBackendUrl(url);
-        setStep(3);
+        localStorage.setItem(STORAGE_KEY, cleanUrl);
+        setBackendUrl(cleanUrl);
       } else {
         setUrlStatus("error");
       }
@@ -69,19 +89,20 @@ export default function Home() {
     }
   };
 
-  // ── File Handling ──
+  // ── File Drop & Select ──
   const handleFile = (f) => {
     if (!f?.type.startsWith("image/")) {
-      setError("শুধু image file দিন (JPG, PNG, WEBP)");
+      setError("শুধু ইমেজ ফাইল দিন (JPG, PNG, WEBP)");
       return;
     }
-    if (f.size > 20 * 1024 * 1024) {
-      setError("File 20MB এর বেশি হবে না");
+    if (f.size > 25 * 1024 * 1024) {
+      setError("ফাইল ২৫MB এর নিচে হতে হবে");
       return;
     }
     setError("");
     setFile(f);
     setPreview(URL.createObjectURL(f));
+    setStudioReady(false);
   };
 
   const onDrop = useCallback((e) => {
@@ -90,390 +111,629 @@ export default function Home() {
     handleFile(e.dataTransfer.files[0]);
   }, []);
 
-  // ── Analyze Image ──
-  const analyzeImage = async () => {
+  // ── Timer for Live Progress ──
+  useEffect(() => {
+    let timer;
+    if (loading) {
+      setElapsed(0);
+      timer = setInterval(() => setElapsed(s => s + 1), 1000);
+    }
+    return () => clearInterval(timer);
+  }, [loading]);
+
+  const addLog = (msg, icon = "⚡") => {
+    setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), msg, icon }]);
+  };
+
+  // ── ANALYZE IMAGE (DIRECT BROWSER-TO-COLAB FETCH) ──
+  const startAnalyze = async () => {
     if (!file || urlStatus !== "ok") return;
-    setProcessing(true);
+    setLoading(true);
     setError("");
-    setProgress(10);
+    setLogs([]);
+    setStudioReady(false);
 
     try {
-      setProcStep("📸 Image প্রসেস ও এনকোড হচ্ছে...");
-      const toBase64 = (f) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(f);
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = (e) => reject(e);
+      addLog("ইমেজ Base64 এনকোড করা হচ্ছে...", "📸");
+      const toBase64 = (f) => new Promise((res, rej) => {
+        const r = new FileReader();
+        r.readAsDataURL(f);
+        r.onload = () => res(r.result);
+        r.onerror = (e) => rej(e);
       });
 
       const base64Data = await toBase64(file);
-      setProgress(25);
-      setProcStep("👁️ Colab AI ব্যাকএন্ডে রিকোয়েস্ট পাঠানো হচ্ছে...");
+      addLog("Colab GPU ব্যাকএন্ডে ইমেজ পাঠানো হচ্ছে...", "🚀");
+
+      // Simulated realistic sub-step logger
+      const step1 = setTimeout(() => addLog("ডিকোড ও কালার প্যালেট তৈরি হচ্ছে...", "🎨"), 4000);
+      const step2 = setTimeout(() => addLog("EasyOCR টেক্সট ও পিক্সেল বাউন্ডিং বক্স খুঁজছে...", "🔍"), 10000);
+      const step3 = setTimeout(() => addLog("Vision AI (llava) ভিজ্যুয়াল লেআউট বিশ্লেষণ করছে...", "👁️"), 20000);
+      const step4 = setTimeout(() => addLog("Hermes3:8b পিক্সেল-একুরেট HTML/CSS কোড জেনারেট করছে...", "💻"), 35000);
 
       const payload = {
         image: base64Data,
         filename: file.name
       };
 
-      let response;
-      let usedProxy = false;
+      // Direct client fetch (No Vercel 10s timeout!)
+      const response = await fetch(`${backendUrl}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-      // 1. Try Direct Fetch first
-      try {
-        response = await fetch(`${backendUrl}/analyze`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch (directErr) {
-        console.warn("Direct fetch error, falling back to server proxy:", directErr);
-        setProcStep("🔄 প্রক্সি কানেকশন দিয়ে রি-ট্রাই করা হচ্ছে...");
-        usedProxy = true;
-        // 2. Fallback to /api/proxy
-        response = await fetch("/api/proxy", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetUrl: `${backendUrl}/analyze`,
-            image: base64Data,
-            filename: file.name
-          }),
-        });
-      }
-
-      setProgress(60);
-      setProcStep("💻 Vision AI & hermes3:8b কোড জেনারেট করছে...");
+      clearTimeout(step1);
+      clearTimeout(step2);
+      clearTimeout(step3);
+      clearTimeout(step4);
 
       if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || `Server error ${response.status}`);
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || `Server returned HTTP ${response.status}`);
       }
 
       const data = await response.json();
-      if (!data.success) throw new Error(data.error || "Unknown AI error");
+      if (!data.success) throw new Error(data.error || "Processing failed");
 
-      setProgress(90);
-      setProcStep("🎨 Figma-style Editor তৈরি হচ্ছে...");
+      addLog(`সফল! ${data.texts?.length || 0} টি টেক্সট এলিমেন্ট পাওয়া গেছে।`, "✅");
+      addLog("Figma Studio Workspace রেন্ডার হচ্ছে...", "🎉");
 
-      sessionStorage.setItem("editorData", JSON.stringify({
-        texts:         data.texts || [],
-        generatedHTML: data.generatedHTML || "",
-        filename:      data.filename || file.name,
-        imageDataUrl:  data.imageDataUrl || base64Data,
-        dominantColor: data.dominantColor || "#ffffff",
-        palette:       data.palette || [],
-        width:         data.width || 800,
-        height:        data.height || 600,
-      }));
+      // Initialize Studio Data
+      setTexts(data.texts || []);
+      setGenHTML(data.generatedHTML || "");
+      setFilename(data.filename || file.name);
+      setImgSrc(data.imageDataUrl || base64Data);
+      setCanvasW(data.width || 1000);
+      setCanvasH(data.height || 1400);
+      setDominantColor(data.dominantColor || "#ffffff");
+      setPalette(data.palette || []);
 
-      setProgress(100);
-      router.push("/editor");
+      const initialTexts = {};
+      (data.texts || []).forEach(t => { initialTexts[t.id] = t.text; });
+      setCurTexts(initialTexts);
+      if (data.texts && data.texts.length > 0) {
+        setSelectedId(data.texts[0].id);
+      }
+
+      setStudioReady(true);
+      setLoading(false);
+
     } catch (err) {
-      setError(`❌ ${err.message}`);
-      setProcessing(false);
-      setProgress(0);
+      console.error(err);
+      addLog(`ত্রুটি: ${err.message}`, "❌");
+      setError(err.message);
+      setLoading(false);
     }
   };
 
-  // ── Step Indicator ──
-  const StepDot = ({ n, label }) => {
-    const done    = step > n;
-    const current = step === n;
-    return (
-      <div className="flex flex-col items-center gap-1">
-        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all
-          ${done    ? "bg-emerald-500 text-white"
-          : current ? "bg-violet-600 text-white ring-4 ring-violet-500/30"
-          : "bg-slate-800 text-slate-500"}`}>
-          {done ? "✓" : n}
-        </div>
-        <span className={`text-[10px] font-semibold ${current ? "text-violet-400" : done ? "text-emerald-400" : "text-slate-600"}`}>
-          {label}
-        </span>
-      </div>
-    );
+  // ── Build Current Dynamic HTML ──
+  const buildCurrentHTML = () => {
+    if (!genHTML) return "";
+    let html = genHTML;
+    texts.forEach(t => {
+      const val = (curTexts[t.id] ?? t.text)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      html = html.replace(
+        new RegExp(`(id=["']${t.id}["'][^>]*>)[^<]*`, "g"),
+        (_, tag) => tag + val
+      );
+    });
+    return html;
   };
 
+  // ── Update Iframe on Edit ──
+  useEffect(() => {
+    if (!studioReady || !genHTML || !frameRef.current) return;
+    const doc = frameRef.current.contentDocument || frameRef.current.contentWindow.document;
+    doc.open();
+    doc.write(buildCurrentHTML());
+    doc.close();
+
+    const handleFrameClick = () => {
+      try {
+        texts.forEach(t => {
+          const el = doc.getElementById(t.id);
+          if (el) {
+            el.style.outline = selectedId === t.id ? "2px solid #0ea5e9" : "none";
+            el.onclick = (e) => {
+              e.stopPropagation();
+              setSelectedId(t.id);
+            };
+          }
+        });
+      } catch {}
+    };
+
+    const timer = setTimeout(handleFrameClick, 300);
+    return () => clearTimeout(timer);
+  }, [curTexts, genHTML, texts, selectedId, studioReady]);
+
+  // ── Split Slider Handlers ──
+  const handleMouseDown = () => { isDragging.current = true; };
+  const handleMouseUp   = () => { isDragging.current = false; };
+  const handleMouseMove = (e) => {
+    if (!isDragging.current || !splitRef.current) return;
+    const rect = splitRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    setSliderPos(Math.round((x / rect.width) * 100));
+  };
+
+  useEffect(() => {
+    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => {
+      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("mousemove", handleMouseMove);
+    };
+  }, []);
+
+  const updateText = (id, val) => {
+    setCurTexts(prev => ({ ...prev, [id]: val }));
+  };
+
+  // ── Exports ──
+  const downloadHTML = () => {
+    const blob = new Blob([buildCurrentHTML()], { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `pixel_clone_${filename}.html`;
+    a.click();
+  };
+
+  const copyCodeToClipboard = () => {
+    navigator.clipboard.writeText(buildCurrentHTML());
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2500);
+  };
+
+  const downloadPNG = () => {
+    const fr = frameRef.current;
+    if (!fr) return;
+    const s = fr.contentDocument.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    s.onload = () => {
+      fr.contentWindow.html2canvas(fr.contentDocument.body, { scale: 2 }).then(canvas => {
+        const a = document.createElement("a");
+        a.download = `pixel_clone_${filename}.png`;
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      });
+    };
+    fr.contentDocument.head.appendChild(s);
+  };
+
+  const selectedItem = texts.find(t => t.id === selectedId);
+  const filteredTexts = texts.filter(t =>
+    (curTexts[t.id] ?? t.text).toLowerCase().includes(searchQuery.toLowerCase()) ||
+    t.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
-    <main className="min-h-screen bg-[#0c0c1e] flex flex-col items-center p-5 pt-8">
+    <main className="min-h-screen bg-[#0d0e15] text-[#e0e0e0] font-sans flex flex-col">
 
-      {/* Header */}
-      <div className="text-center mb-6">
-        <span className="inline-block px-3 py-1 bg-violet-500/20 border border-violet-500/40
-          rounded-full text-violet-300 text-xs font-semibold mb-3">
-          0% Filter · llava + hermes3:8b · Uncensored AI
-        </span>
-        <h1 className="text-4xl font-black text-white mb-2">
-          🎨 AI Image{" "}
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-fuchsia-400">
-            → Editable
-          </span>
-        </h1>
-        <p className="text-slate-400 text-sm">
-          যেকোনো Design Image → Figma-style Live Editor
-        </p>
-      </div>
-
-      {/* Step Indicator */}
-      <div className="flex items-center gap-2 mb-6">
-        <StepDot n={1} label="Colab Code" />
-        <div className={`h-px w-12 ${step > 1 ? "bg-emerald-500" : "bg-slate-700"}`} />
-        <StepDot n={2} label="URL Verify" />
-        <div className={`h-px w-12 ${step > 2 ? "bg-emerald-500" : "bg-slate-700"}`} />
-        <StepDot n={3} label="Upload" />
-      </div>
-
-      <div className="w-full max-w-xl flex flex-col gap-4">
-
-        {/* ══ STEP 1: Copy Colab Code ══ */}
-        <div className={`rounded-2xl border transition-all duration-300
-          ${step === 1 ? "border-violet-500 bg-violet-500/5" : "border-slate-700/50 bg-slate-900/30"}`}>
-          <div className="p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h2 className={`font-bold text-sm flex items-center gap-2
-                  ${step >= 1 ? "text-white" : "text-slate-500"}`}>
-                  <span className="text-lg">📋</span> Step 1 — Colab Backend Code Copy করুন
-                </h2>
-                <p className="text-slate-500 text-xs mt-0.5">
-                  Google Colab এ paste করে run করুন → URL পাবেন
-                </p>
-              </div>
-              {step > 1 && (
-                <span className="text-emerald-400 text-xs bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                  ✓ Done
-                </span>
-              )}
-            </div>
-
-            {/* Code Preview */}
-            <div className="bg-[#090920] rounded-xl border border-[#1a1a40] overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 bg-[#0f0f30] border-b border-[#1a1a40]">
-                <div className="flex gap-1.5">
-                  <div className="w-3 h-3 rounded-full bg-red-500/70" />
-                  <div className="w-3 h-3 rounded-full bg-yellow-500/70" />
-                  <div className="w-3 h-3 rounded-full bg-green-500/70" />
-                </div>
-                <span className="text-[10px] text-slate-500 font-mono">AI_Colab_Backend.py</span>
-                <button
-                  onClick={copyColabCode}
-                  className={`text-xs font-bold px-3 py-1 rounded-md transition-all
-                    ${copied
-                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
-                      : "bg-violet-500/20 text-violet-300 border border-violet-500/40 hover:bg-violet-500/30"
-                    }`}
-                >
-                  {copied ? "✅ Copied!" : "📋 Copy Code"}
-                </button>
-              </div>
-              <pre className="p-3 text-xs text-slate-400 font-mono overflow-hidden h-28 relative">
-                <code>{"# AI Colab Backend Code\n# FastAPI + Ollama (llava + hermes3:8b) + Cloudflare Tunnel\n# Click Copy Code button to get the full code..."}...</code>
-                <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#090920]" />
-              </pre>
-            </div>
-
-            {/* Instructions */}
-            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-              {[
-                { n:"1", t:"Code Copy করুন", i:"📋" },
-                { n:"2", t:"Colab এ paste → Run", i:"▶️" },
-                { n:"3", t:"URL পাবেন → Step 2", i:"🔗" },
-              ].map(s => (
-                <div key={s.n} className="bg-[#0d0d25] rounded-lg p-2 border border-[#1a1a40]">
-                  <div className="text-lg mb-1">{s.i}</div>
-                  <div className="text-[10px] text-slate-400">{s.t}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Colab Link */}
-            <div className="mt-3 flex items-center justify-between">
-              <a href="https://colab.research.google.com" target="_blank" rel="noreferrer"
-                className="text-xs text-violet-400 hover:text-violet-300 underline underline-offset-2">
-                → Google Colab খুলুন (T4 GPU)
-              </a>
-              {step === 1 && (
-                <button
-                  onClick={() => { copyColabCode(); setStep(2); }}
-                  className="text-xs font-bold px-4 py-2 bg-gradient-to-r from-violet-600 to-fuchsia-600
-                    text-white rounded-lg hover:opacity-90 transition-opacity"
-                >
-                  Copy &amp; Next →
-                </button>
-              )}
-            </div>
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* 1. TOP HEADER (BRAND & STATUS)                                          */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      <header className="h-14 bg-[#141622] border-b border-[#222538] px-5 flex items-center justify-between flex-shrink-0 z-30">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-violet-600 to-fuchsia-600 flex items-center justify-center font-black text-white text-sm shadow-md shadow-violet-500/30">
+            AI
+          </div>
+          <div>
+            <h1 className="font-bold text-sm text-white flex items-center gap-2">
+              PhotoToCode <span className="text-[10px] bg-violet-900/60 text-violet-300 border border-violet-500/30 px-2 py-0.5 rounded font-mono">Figma Studio v2</span>
+            </h1>
+            <p className="text-[11px] text-slate-400">100% Uncensored · Pixel-by-Pixel Clone · Free T4 GPU</p>
           </div>
         </div>
 
-        {/* ══ STEP 2: Validate URL ══ */}
-        <div className={`rounded-2xl border transition-all duration-300
-          ${step === 2 ? "border-violet-500 bg-violet-500/5"
-          : step > 2  ? "border-slate-700/50 bg-slate-900/30 opacity-80"
-          : "border-slate-800/50 bg-slate-900/20 opacity-40 pointer-events-none"}`}>
-          <div className="p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h2 className="font-bold text-sm text-white flex items-center gap-2">
-                  <span className="text-lg">🔗</span> Step 2 — Colab URL Validate করুন
-                </h2>
-                <p className="text-slate-500 text-xs mt-0.5">
-                  Colab এ run করার পরে যে URL পাবেন সেটা paste করুন
-                </p>
-              </div>
-              {step > 2 && (
-                <button onClick={() => { setStep(2); setUrlStatus("idle"); }}
-                  className="text-xs text-slate-500 hover:text-slate-300">
-                  ✎ Change
-                </button>
-              )}
-            </div>
+        {/* Colab Status Pill */}
+        <div className="flex items-center gap-2 text-xs">
+          <span className={`w-2.5 h-2.5 rounded-full ${urlStatus === "ok" ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+          <span className="font-mono text-slate-300">
+            {urlStatus === "ok" ? "Colab Backend: Connected ✅" : "Colab Disconnected ❌"}
+          </span>
+        </div>
+      </header>
 
-            <div className="flex gap-2">
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* 2. SETUP & UPLOAD BAR (COLLAPSIBLE / ACCORDION)                         */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      <div className="bg-[#11131c] border-b border-[#1f2233] p-4">
+        <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4">
+          
+          {/* Box 1: Colab Code Copy */}
+          <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <span>1.</span> Colab Code
+                </span>
+                <a href="https://colab.research.google.com" target="_blank" rel="noreferrer" className="text-[11px] text-violet-400 hover:underline">
+                  Open Colab ↗
+                </a>
+              </div>
+              <p className="text-[11px] text-slate-400">Colab এ কোড পেস্ট করে T4 GPU তে Run করুন</p>
+            </div>
+            <button
+              onClick={copyColabCode}
+              className="mt-2.5 w-full py-2 bg-[#222538] hover:bg-[#2c3049] text-xs font-bold text-violet-300 rounded-lg border border-violet-500/20 transition-all flex items-center justify-center gap-1.5"
+            >
+              {copiedCode ? "✅ Copied to Clipboard!" : "📋 Copy Colab Code"}
+            </button>
+          </div>
+
+          {/* Box 2: Colab URL Validate */}
+          <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
+            <div>
+              <span className="text-xs font-bold text-white flex items-center gap-1.5 mb-1">
+                <span>2.</span> Cloudflare URL
+              </span>
+              <p className="text-[11px] text-slate-400">Colab থেকে পাওয়া পাবলিক URL টি দিন</p>
+            </div>
+            <div className="flex gap-1.5 mt-2.5">
               <input
                 type="text"
                 value={backendUrl}
                 onChange={(e) => { setBackendUrl(e.target.value); setUrlStatus("idle"); }}
-                onKeyDown={(e) => e.key === "Enter" && testUrl()}
+                onKeyDown={(e) => e.key === "Enter" && testConnection()}
                 placeholder="https://xxxx.trycloudflare.com"
-                className="flex-1 px-3 py-2.5 bg-[#090920] border border-[#202050] rounded-xl
-                  text-white text-xs font-mono placeholder:text-slate-600
-                  focus:outline-none focus:border-violet-500 transition-colors"
+                className="flex-1 px-2.5 py-1.5 bg-[#0b0c12] border border-[#2c3049] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-violet-500"
               />
               <button
-                onClick={testUrl}
-                disabled={!backendUrl.trim() || urlStatus === "checking"}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap
-                  ${urlStatus === "checking"
-                    ? "bg-yellow-500/20 text-yellow-400 border border-yellow-500/40 animate-pulse"
-                    : "bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-30"
-                  }`}
+                onClick={() => testConnection()}
+                disabled={!backendUrl || urlStatus === "checking"}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                  ${urlStatus === "checking" ? "bg-yellow-500/20 text-yellow-400 animate-pulse" : "bg-violet-600 hover:bg-violet-500 text-white"}`}
               >
-                {urlStatus === "checking" ? "⏳ Testing..." : "✅ Validate"}
+                {urlStatus === "checking" ? "..." : "Validate"}
+              </button>
+            </div>
+          </div>
+
+          {/* Box 3: Image Upload & Action */}
+          <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>3.</span> Upload &amp; Convert
+              </span>
+              {file && <span className="text-[10px] text-emerald-400 truncate max-w-[120px]">{file.name}</span>}
+            </div>
+
+            <div className="flex gap-2 mt-2.5">
+              <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleFile(e.target.files[0])} />
+              <button
+                onClick={() => inputRef.current?.click()}
+                className="flex-1 py-2 bg-[#222538] hover:bg-[#2c3049] text-xs font-semibold text-slate-300 rounded-lg border border-[#333852] transition-colors"
+              >
+                {file ? "📸 Change Image" : "📸 Select Image"}
+              </button>
+              
+              <button
+                onClick={startAnalyze}
+                disabled={!file || urlStatus !== "ok" || loading}
+                className="px-4 py-2 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-purple-600 hover:opacity-95 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md shadow-violet-500/20 transition-all whitespace-nowrap"
+              >
+                {loading ? `⏳ Processing (${elapsed}s)` : "🚀 Convert to Figma"}
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* 3. LIVE CONSOLE / REAL-TIME PROCESS MONITOR                             */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {loading && (
+        <div className="bg-[#090a10] border-b border-[#1f2233] p-4 transition-all">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-3.5 h-3.5 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs font-bold text-white uppercase tracking-wider">
+                  Live Colab GPU Processing Terminal ({elapsed}s)
+                </span>
+              </div>
+              <span className="text-xs text-slate-400 font-mono">llava + hermes3:8b</span>
+            </div>
+
+            <div className="bg-[#050608] rounded-lg p-3 border border-[#1b1e2c] font-mono text-xs space-y-1.5 max-h-32 overflow-y-auto">
+              {logs.map((l, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-slate-600 text-[10px]">{l.time}</span>
+                  <span>{l.icon}</span>
+                  <span className="text-slate-300">{l.msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-950/40 border-b border-red-500/40 p-3 text-center">
+          <p className="text-xs text-red-400 font-medium">❌ {error}</p>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* 4. FIGMA STUDIO WORKSPACE (SIDE-BY-SIDE + SLIDER + DIFF)                 */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {studioReady ? (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          
+          {/* Figma Studio Toolbar */}
+          <div className="h-11 bg-[#181a27] border-b border-[#262a3f] px-4 flex items-center justify-between flex-shrink-0">
+            
+            {/* View Mode Switches */}
+            <div className="flex items-center bg-[#0e1018] p-1 rounded-lg border border-[#262a3f] gap-1">
+              <button
+                onClick={() => setViewMode("side-by-side")}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${viewMode === "side-by-side" ? "bg-[#252a3f] text-white font-bold" : "text-slate-400 hover:text-white"}`}
+              >
+                ◫ Side by Side (1:1)
+              </button>
+              <button
+                onClick={() => setViewMode("split-slider")}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${viewMode === "split-slider" ? "bg-[#252a3f] text-white font-bold" : "text-slate-400 hover:text-white"}`}
+              >
+                ↔ Split Slider
+              </button>
+              <button
+                onClick={() => setViewMode("overlay")}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${viewMode === "overlay" ? "bg-[#252a3f] text-white font-bold" : "text-slate-400 hover:text-white"}`}
+              >
+                ⧉ Overlay Diff
+              </button>
+              <button
+                onClick={() => setViewMode("clone-only")}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all ${viewMode === "clone-only" ? "bg-[#252a3f] text-white font-bold" : "text-slate-400 hover:text-white"}`}
+              >
+                🖥️ HTML Only
               </button>
             </div>
 
-            {/* Status */}
-            {urlStatus === "ok" && (
-              <div className="mt-2 flex items-center gap-2 p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
-                <span className="text-emerald-400 text-sm">✅</span>
-                <span className="text-emerald-400 text-xs font-semibold">Connected! Colab backend চালু আছে।</span>
+            {/* Center: Canvas info */}
+            <span className="text-xs text-slate-400 font-mono hidden md:inline">
+              Canvas: {canvasW} × {canvasH} px · {texts.length} Layers
+            </span>
+
+            {/* Right: Zoom & Export Actions */}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-[#0e1018] border border-[#262a3f] rounded-lg px-2 py-0.5 text-xs">
+                <button onClick={() => setZoom(z => Math.max(30, z - 10))} className="px-1 text-slate-400 hover:text-white font-bold">-</button>
+                <span className="font-mono text-slate-300 w-10 text-center">{zoom}%</span>
+                <button onClick={() => setZoom(z => Math.min(200, z + 10))} className="px-1 text-slate-400 hover:text-white font-bold">+</button>
+                <button onClick={() => setZoom(100)} className="ml-1 text-[10px] text-slate-400 hover:text-slate-200">100%</button>
               </div>
-            )}
-            {urlStatus === "error" && (
-              <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
-                <p className="text-red-400 text-xs">❌ Connect হয়নি। Colab এ backend চালু আছে কি?</p>
-                <p className="text-slate-500 text-[11px] mt-1">
-                  Colab run করলে <code className="text-slate-400">https://xxxx.trycloudflare.com</code> URL পাবেন
-                </p>
-              </div>
-            )}
+
+              <button onClick={copyCodeToClipboard} className="px-2.5 py-1 bg-[#222538] hover:bg-[#2c3049] text-xs font-semibold rounded text-slate-200">
+                {isCopied ? "✅ Copied!" : "📋 Copy Code"}
+              </button>
+              <button onClick={downloadHTML} className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-xs font-bold rounded text-white">
+                💾 HTML
+              </button>
+              <button onClick={downloadPNG} className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-xs font-bold rounded text-white">
+                🖼️ PNG
+              </button>
+            </div>
           </div>
-        </div>
 
-        {/* ══ STEP 3: Upload Image ══ */}
-        <div className={`rounded-2xl border transition-all duration-300
-          ${step === 3 ? "border-violet-500 bg-violet-500/5"
-          : "border-slate-800/50 bg-slate-900/20 opacity-40 pointer-events-none"}`}>
-          <div className="p-4">
-            <h2 className="font-bold text-sm text-white flex items-center gap-2 mb-3">
-              <span className="text-lg">📸</span> Step 3 — Image Upload করুন
-              {urlStatus === "ok" && (
-                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30 ml-auto">
-                  Backend: Connected ✅
-                </span>
-              )}
-            </h2>
-
-            {/* Drop Zone */}
-            {!preview ? (
-              <div
-                onDrop={onDrop}
-                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-                onDragLeave={() => setDragging(false)}
-                onClick={() => inputRef.current?.click()}
-                className={`rounded-xl border-2 border-dashed transition-all cursor-pointer py-10 text-center
-                  ${dragging ? "border-fuchsia-400 bg-fuchsia-500/10" : "border-slate-700 hover:border-violet-500 hover:bg-slate-800/30"}`}
-              >
-                <input ref={inputRef} type="file" accept="image/*" className="hidden"
-                  onChange={(e) => handleFile(e.target.files[0])} />
-                <div className="text-4xl mb-2">📸</div>
-                <p className="text-white text-sm font-semibold">Drag & Drop বা Click করুন</p>
-                <p className="text-slate-500 text-xs mt-1">Poster · Banner · Certificate · Social Post</p>
-                <p className="text-slate-700 text-xs mt-1">JPG, PNG, WEBP · Max 20MB</p>
+          {/* Figma 3-Pane Body */}
+          <div className="flex-1 flex overflow-hidden">
+            
+            {/* ── LEFT PANE: LAYERS TREE ── */}
+            <aside className="w-64 bg-[#141622] border-r border-[#222538] flex flex-col flex-shrink-0">
+              <div className="p-2 border-b border-[#222538]">
+                <input
+                  type="text"
+                  placeholder="Filter layers..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-[#0c0d15] border border-[#262a3f] rounded px-2.5 py-1 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-violet-500"
+                />
               </div>
-            ) : (
-              <div className="flex gap-4 items-center p-3 bg-[#090920] rounded-xl border border-[#202050]">
-                <img src={preview} className="w-28 h-auto rounded-lg object-cover border border-slate-700 shadow-lg" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-semibold truncate">{file.name}</p>
-                  <p className="text-slate-400 text-xs">{(file.size/1024).toFixed(0)} KB</p>
+
+              <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
+                {filteredTexts.map((t) => {
+                  const isSelected = selectedId === t.id;
+                  const currentVal = curTexts[t.id] ?? t.text;
+                  return (
+                    <div
+                      key={t.id}
+                      onClick={() => setSelectedId(t.id)}
+                      className={`px-2.5 py-1.5 rounded text-xs cursor-pointer flex items-center justify-between transition-colors
+                        ${isSelected ? "bg-violet-600/30 text-white border border-violet-500/50 font-semibold" : "hover:bg-[#1c1e2e] text-slate-300"}`}
+                    >
+                      <div className="flex items-center gap-1.5 overflow-hidden">
+                        <span className="text-[10px] text-slate-500 font-mono">T</span>
+                        <span className="truncate max-w-[130px]" title={currentVal}>{currentVal}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-mono">{t.font_size}px</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </aside>
+
+            {/* ── CENTER CANVAS: FIGMA 1:1 WORKSPACE ── */}
+            <div className="flex-1 bg-[#0a0b10] overflow-auto flex flex-col items-center justify-start p-6 relative">
+              <div
+                className="transition-transform duration-100 origin-top flex flex-col items-center"
+                style={{ transform: `scale(${zoom / 100})` }}
+              >
+                {/* 1. SIDE BY SIDE */}
+                {viewMode === "side-by-side" && (
+                  <div className="flex gap-8 items-start">
+                    {/* Original Frame */}
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center justify-between w-full px-1 mb-2 text-xs font-semibold text-slate-400">
+                        <span>📸 ORIGINAL REFERENCE</span>
+                        <span className="text-[10px] bg-[#1a1c29] px-2 py-0.5 rounded text-slate-400 font-mono">{canvasW} × {canvasH}</span>
+                      </div>
+                      <div
+                        className="rounded-lg overflow-hidden border-2 border-[#262a3f] shadow-2xl bg-black"
+                        style={{ width: `${canvasW * 0.55}px`, height: `${canvasH * 0.55}px` }}
+                      >
+                        <img src={imgSrc} alt="Original Reference" className="w-full h-full object-contain" />
+                      </div>
+                    </div>
+
+                    {/* Live HTML Clone Frame */}
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center justify-between w-full px-1 mb-2 text-xs font-semibold text-violet-400">
+                        <span>✨ PIXEL-PERFECT HTML CLONE</span>
+                        <span className="text-[10px] bg-violet-900/40 text-violet-300 border border-violet-500/30 px-2 py-0.5 rounded font-mono">LIVE DOM</span>
+                      </div>
+                      <div
+                        className="rounded-lg overflow-hidden border-2 border-violet-500/80 shadow-2xl bg-white relative"
+                        style={{ width: `${canvasW * 0.55}px`, height: `${canvasH * 0.55}px` }}
+                      >
+                        <iframe ref={frameRef} title="Live Clone" className="w-full h-full border-0" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. SPLIT SLIDER */}
+                {viewMode === "split-slider" && (
+                  <div className="flex flex-col items-center">
+                    <span className="mb-2 text-xs text-slate-400">Drag handle left/right to compare pixel-for-pixel alignment ({sliderPos}%)</span>
+                    <div
+                      ref={splitRef}
+                      className="relative overflow-hidden rounded-lg border-2 border-[#333852] shadow-2xl cursor-ew-resize select-none"
+                      style={{ width: `${canvasW * 0.65}px`, height: `${canvasH * 0.65}px` }}
+                      onMouseDown={handleMouseDown}
+                    >
+                      <div className="absolute inset-0 bg-white">
+                        <iframe ref={frameRef} title="Live Clone" className="w-full h-full border-0 pointer-events-none" />
+                      </div>
+                      <div className="absolute inset-0 overflow-hidden bg-black border-r-2 border-violet-400" style={{ width: `${sliderPos}%` }}>
+                        <img src={imgSrc} alt="Original" className="object-contain max-w-none" style={{ width: `${canvasW * 0.65}px`, height: `${canvasH * 0.65}px` }} />
+                      </div>
+                      <div className="absolute top-0 bottom-0 w-1 bg-violet-500 shadow-lg pointer-events-none" style={{ left: `${sliderPos}%` }}>
+                        <div className="absolute top-1/2 -translate-y-1/2 -left-3.5 w-8 h-8 rounded-full bg-violet-600 text-white text-[11px] font-bold flex items-center justify-center shadow-md border border-white">
+                          ⇄
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. OVERLAY DIFF */}
+                {viewMode === "overlay" && (
+                  <div className="flex flex-col items-center">
+                    <div className="mb-3 flex items-center gap-3 text-xs text-slate-300">
+                      <span>Original</span>
+                      <input type="range" min="0" max="100" value={overlayOpacity} onChange={(e) => setOverlayOpacity(Number(e.target.value))} className="w-48 accent-violet-500 cursor-pointer" />
+                      <span>HTML Clone Overlay: <b>{overlayOpacity}%</b></span>
+                    </div>
+                    <div className="relative rounded-lg overflow-hidden border-2 border-violet-500 shadow-2xl" style={{ width: `${canvasW * 0.65}px`, height: `${canvasH * 0.65}px` }}>
+                      <img src={imgSrc} alt="Original" className="w-full h-full object-contain absolute inset-0" />
+                      <div className="absolute inset-0" style={{ opacity: overlayOpacity / 100 }}>
+                        <iframe ref={frameRef} title="Overlay Clone" className="w-full h-full border-0 pointer-events-none" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. CLONE ONLY */}
+                {viewMode === "clone-only" && (
+                  <div className="rounded-lg overflow-hidden border-2 border-violet-500 shadow-2xl bg-white" style={{ width: `${canvasW * 0.75}px`, height: `${canvasH * 0.75}px` }}>
+                    <iframe ref={frameRef} title="Full Clone" className="w-full h-full border-0" />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── RIGHT PANE: FIGMA DESIGN INSPECTOR ── */}
+            <aside className="w-72 bg-[#141622] border-l border-[#222538] flex flex-col flex-shrink-0 p-3.5 overflow-y-auto space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-[#222538]">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">Design Inspector</span>
+                <span className="text-[10px] font-mono text-violet-400 bg-violet-900/30 px-2 py-0.5 rounded border border-violet-500/30">
+                  {selectedItem ? selectedItem.id : "Canvas"}
+                </span>
+              </div>
+
+              {selectedItem ? (
+                <div className="space-y-3.5">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">Text Content (Live Update)</label>
+                    <textarea
+                      rows={3}
+                      value={curTexts[selectedItem.id] ?? selectedItem.text}
+                      onChange={(e) => updateText(selectedItem.id, e.target.value)}
+                      className="w-full bg-[#0c0d15] border border-[#2c3049] focus:border-violet-500 rounded-lg p-2 text-xs text-white font-medium focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Position &amp; Size</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                      <div className="bg-[#0c0d15] p-2 rounded border border-[#222538] flex justify-between">
+                        <span className="text-slate-500">X</span>
+                        <span className="text-white">{selectedItem.left}%</span>
+                      </div>
+                      <div className="bg-[#0c0d15] p-2 rounded border border-[#222538] flex justify-between">
+                        <span className="text-slate-500">Y</span>
+                        <span className="text-white">{selectedItem.top}%</span>
+                      </div>
+                      <div className="bg-[#0c0d15] p-2 rounded border border-[#222538] flex justify-between">
+                        <span className="text-slate-500">W</span>
+                        <span className="text-white">{selectedItem.width}%</span>
+                      </div>
+                      <div className="bg-[#0c0d15] p-2 rounded border border-[#222538] flex justify-between">
+                        <span className="text-slate-500">H</span>
+                        <span className="text-white">{selectedItem.height}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="bg-[#0c0d15] p-2 rounded border border-[#222538] flex justify-between items-center text-xs">
+                      <span className="text-slate-400">Font Size</span>
+                      <span className="font-mono font-semibold text-white">{selectedItem.font_size} px</span>
+                    </div>
+                    <div className="bg-[#0c0d15] p-2 rounded border border-[#222538] flex justify-between items-center text-xs">
+                      <span className="text-slate-400">Color</span>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3.5 h-3.5 rounded border border-white/20" style={{ backgroundColor: selectedItem.color }} />
+                        <span className="font-mono font-semibold text-white">{selectedItem.color}</span>
+                      </div>
+                    </div>
+                  </div>
+
                   <button
-                    onClick={() => { setFile(null); setPreview(null); }}
-                    className="text-xs text-slate-600 hover:text-red-400 mt-1.5 transition-colors"
+                    onClick={() => updateText(selectedItem.id, selectedItem.text)}
+                    className="w-full py-1.5 text-xs text-slate-400 hover:text-white bg-[#0c0d15] hover:bg-[#1a1c2b] rounded border border-[#222538] transition-colors"
                   >
-                    ✕ সরাও
+                    ↺ Reset Text
                   </button>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="text-center py-10 text-slate-500 text-xs">
+                  <p className="text-2xl mb-1">👆</p>
+                  <p>Select any layer from the left to edit and inspect properties.</p>
+                </div>
+              )}
+            </aside>
           </div>
         </div>
-
-        {/* Error */}
-        {error && (
-          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
-            {error}
+      ) : (
+        /* Empty State Placeholder */
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-[#171926] border border-[#262a3f] flex items-center justify-center text-3xl mb-4 shadow-xl">
+            🖼️
           </div>
-        )}
+          <h2 className="text-lg font-bold text-white mb-1">কোনো ইমেজ লোড করা নেই</h2>
+          <p className="text-xs text-slate-400 max-w-sm mb-4">
+            উপরে Step 3 থেকে যেকোনো ডিজাইন বা ডকুমেন্ট ইমেজ আপলোড করে &ldquo;Convert to Figma&rdquo; বাটন চাপুন।
+          </p>
+        </div>
+      )}
 
-        {/* ── Analyze Button ── */}
-        {preview && urlStatus === "ok" && !processing && (
-          <button
-            onClick={analyzeImage}
-            className="w-full py-4 rounded-xl font-black text-white text-base
-              bg-gradient-to-r from-violet-600 via-fuchsia-600 to-purple-600
-              hover:from-violet-500 hover:via-fuchsia-500 hover:to-purple-500
-              active:scale-[0.99] transition-all shadow-xl shadow-violet-500/30"
-          >
-            🚀 AI দিয়ে Figma-style Convert করো
-          </button>
-        )}
-
-        {/* ── Processing ── */}
-        {processing && (
-          <div className="p-5 bg-slate-900 rounded-2xl border border-slate-700">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-5 h-5 rounded-full border-2 border-violet-400 border-t-transparent animate-spin flex-shrink-0" />
-              <div>
-                <p className="text-white font-bold text-sm">Colab AI Processing...</p>
-                <p className="text-violet-400 text-xs font-mono">{procStep}</p>
-              </div>
-            </div>
-            <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-purple-500 rounded-full transition-all duration-700"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-xs text-slate-600 mt-1.5">
-              <span>llava + hermes3:8b</span>
-              <span>{progress}%</span>
-            </div>
-            <p className="text-slate-600 text-xs mt-2 text-center">30-90 সেকেন্ড লাগতে পারে...</p>
-          </div>
-        )}
-
-        {/* Footer info */}
-        {!processing && (
-          <div className="flex items-center justify-center gap-3 text-[11px] text-slate-700 py-1">
-            <span>0% Censored</span>
-            <span>·</span>
-            <span>Free T4 GPU</span>
-            <span>·</span>
-            <span>Colab + Vercel</span>
-          </div>
-        )}
-      </div>
     </main>
   );
 }
