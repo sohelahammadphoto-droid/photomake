@@ -24,34 +24,73 @@ const safetySettings = [
 ];
 
 async function resolveModelCandidates(apiKey) {
-  const defaultPriority = [
-    "gemini-1.5-flash-latest",
+  const preferredPriority = [
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
+    "gemini-2.0-flash-001",
     "gemini-2.0-flash-exp",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
     "gemini-1.5-flash-002",
     "gemini-1.5-flash-001",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash-8b",
+    "gemini-2.5-pro",
+    "gemini-2.0-pro-exp-02-05",
     "gemini-1.5-pro",
+    "gemini-1.5-pro-latest",
   ];
 
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
     if (res.ok) {
       const data = await res.json();
-      const available = (data.models || [])
-        .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+      const rawModels = data.models || [];
+
+      // Strictly filter models capable of multimodal vision / image input
+      const visionModels = rawModels
+        .filter((m) => {
+          const methods = m.supportedGenerationMethods || [];
+          if (!methods.includes("generateContent")) return false;
+
+          const name = (m.name || "").toLowerCase();
+          // Exclude text-to-speech, audio, embedding, and other non-image models
+          if (
+            name.includes("-tts") ||
+            name.includes("tts") ||
+            name.includes("audio") ||
+            name.includes("embedding") ||
+            name.includes("aqa") ||
+            name.includes("imagen") ||
+            name.includes("learnlm")
+          ) {
+            return false;
+          }
+
+          // If inputModalities is returned, ensure it explicitly includes 'image'
+          if (Array.isArray(m.inputModalities) && m.inputModalities.length > 0) {
+            const lowerMods = m.inputModalities.map((x) => String(x).toLowerCase());
+            if (!lowerMods.includes("image")) return false;
+          }
+
+          return true;
+        })
         .map((m) => m.name.replace("models/", ""));
 
-      const matched = defaultPriority.filter((p) => available.includes(p));
-      if (matched.length > 0) return matched;
-      if (available.length > 0) return available;
+      // Match preferred vision models first, then any other valid vision models
+      const matched = preferredPriority.filter((p) => visionModels.includes(p));
+      const remainingVision = visionModels.filter((v) => !matched.includes(v));
+      const finalCandidates = [...matched, ...remainingVision];
+
+      if (finalCandidates.length > 0) {
+        console.log("Filtered vision candidate models:", finalCandidates);
+        return finalCandidates;
+      }
     }
   } catch (err) {
     console.warn("Dynamic model lookup failed, using defaults:", err);
   }
 
-  return defaultPriority;
+  return preferredPriority;
 }
 
 export async function POST(req) {
@@ -138,10 +177,8 @@ Your job is purely technical OCR and layout reconstruction:
       } catch (err) {
         console.warn(`Model ${modelName} failed:`, err.message);
         lastError = err;
-        if (err.message && (err.message.includes("404") || err.message.includes("not found"))) {
-          continue; // Try next candidate model
-        }
-        throw err;
+        // Seamlessly try next candidate model
+        continue;
       }
     }
 

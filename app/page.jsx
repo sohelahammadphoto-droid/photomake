@@ -65,14 +65,36 @@ export default function Home() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.models && data.models.length > 0) {
+        const rawModels = data.models || [];
+        const visionModels = rawModels.filter((m) => {
+          const methods = m.supportedGenerationMethods || [];
+          if (!methods.includes("generateContent")) return false;
+          const name = (m.name || "").toLowerCase();
+          if (
+            name.includes("tts") ||
+            name.includes("audio") ||
+            name.includes("embedding") ||
+            name.includes("imagen") ||
+            name.includes("aqa") ||
+            name.includes("learnlm")
+          ) {
+            return false;
+          }
+          if (Array.isArray(m.inputModalities) && m.inputModalities.length > 0) {
+            const lowerMods = m.inputModalities.map((x) => String(x).toLowerCase());
+            if (!lowerMods.includes("image")) return false;
+          }
+          return true;
+        });
+
+        if (visionModels.length > 0) {
           setKeyStatus("ok");
           setGeminiKey(k);
           localStorage.setItem("geminiApiKey", k);
           setKeyError("");
         } else {
           setKeyStatus("error");
-          setKeyError("এই Key-তে কোনো মডেল পাওয়া যায়নি।");
+          setKeyError("এই Key-তে কোনো Vision মডেল পাওয়া যায়নি।");
           localStorage.removeItem("geminiApiKey");
         }
       } else {
