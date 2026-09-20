@@ -4,7 +4,9 @@ import { useState, useRef, useCallback, useEffect } from "react";
 const STORAGE_KEY = "colabBackendUrl";
 
 export default function Home() {
-  // ── Connection & Upload State ──
+  // ── Engine & Connection State ──
+  const [engine,     setEngine]     = useState("gemini"); // 'gemini' | 'colab'
+  const [geminiKey,  setGeminiKey]  = useState("");
   const [backendUrl, setBackendUrl] = useState("");
   const [urlStatus,  setUrlStatus]  = useState("idle"); // idle | checking | ok | error
   const [file,       setFile]       = useState(null);
@@ -12,13 +14,7 @@ export default function Home() {
   const [dragging,   setDragging]   = useState(false);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState("");
-  
-  // Backend type & modal state
-  const [backendType, setBackendType] = useState("hf"); // 'hf' | 'colab'
-  const [showGuide,   setShowGuide]   = useState(false);
-  const [copiedApp,   setCopiedApp]   = useState(false);
-  const [copiedReqs,  setCopiedReqs]  = useState(false);
-  const [copiedCode,  setCopiedCode]  = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   // ── Live Progress Stream Logs ──
   const [logs,       setLogs]       = useState([]);
@@ -50,12 +46,15 @@ export default function Home() {
   const splitRef    = useRef(null);
   const isDragging  = useRef(false);
 
-  // Restore saved Backend URL
+  // Restore saved Backend URL & Gemini Key
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      setBackendUrl(saved);
-      testConnection(saved);
+    const savedKey = localStorage.getItem("geminiApiKey");
+    if (savedKey) setGeminiKey(savedKey);
+
+    const savedUrl = localStorage.getItem(STORAGE_KEY);
+    if (savedUrl) {
+      setBackendUrl(savedUrl);
+      testConnection(savedUrl);
     }
   }, []);
 
@@ -158,7 +157,16 @@ export default function Home() {
 
   // ── ANALYZE IMAGE (DIRECT BROWSER-TO-COLAB FETCH) ──
   const startAnalyze = async () => {
-    if (!file || urlStatus !== "ok") return;
+    if (!file) return;
+    if (engine === "gemini" && !geminiKey.trim()) {
+      setError("অনুগ্রহ করে আপনার Google AI Studio API Key দিন (aistudio.google.com থেকে ১ ক্লিকে ফ্রি নেওয়া যায়)।");
+      return;
+    }
+    if (engine === "colab" && urlStatus !== "ok") {
+      setError("Colab ব্যাকএন্ড কানেক্টেড নয়। Colab URL ভ্যালিডেট করুন।");
+      return;
+    }
+
     setLoading(true);
     setError("");
     setLogs([]);
@@ -174,31 +182,46 @@ export default function Home() {
       });
 
       const base64Data = await toBase64(file);
-      const isHf = backendUrl.includes(".hf.space");
-      addLog(`${isHf ? "HuggingFace Space" : "Colab GPU"} ব্যাকএন্ডে ইমেজ পাঠানো হচ্ছে...`, "🚀");
+      let response;
 
-      // Simulated realistic sub-step logger
-      const step1 = setTimeout(() => addLog("কালার প্যালেট ও ডমিন্যান্ট ব্যাকগ্রাউন্ড নির্ণয় হচ্ছে...", "🎨"), 3000);
-      const step2 = setTimeout(() => addLog("EasyOCR টেক্সট ও পিক্সেল বাউন্ডিং বক্স খুঁজছে...", "🔍"), 8000);
-      const step3 = setTimeout(() => addLog("ভিজ্যুয়াল লেআউট ও স্ট্রাকচার বিশ্লেষণ হচ্ছে...", "👁️"), 15000);
-      const step4 = setTimeout(() => addLog("পিক্সেল-একুরেট রেসপন্সিভ HTML/CSS জেনারেট হচ্ছে...", "💻"), 25000);
+      if (engine === "gemini") {
+        addLog("Google Gemini 1.5 Flash Vision API এ পাঠানো হচ্ছে...", "⚡");
+        addLog("সেফটি ফিল্টার সম্পূর্ণ বন্ধ (BLOCK_NONE) সক্রিয়...", "🛡️");
+        const step1 = setTimeout(() => addLog("OCR, টেক্সট বাউন্ডিং বক্স ও ডকুমেন্ট স্ট্রাকচার ডিকোড হচ্ছে...", "🔍"), 1500);
+        const step2 = setTimeout(() => addLog("পিক্সেল-একুরেট রেসপন্সিভ HTML/CSS তৈরি হচ্ছে...", "💻"), 2800);
 
-      const payload = {
-        image: base64Data,
-        filename: file.name
-      };
+        response = await fetch("/api/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: base64Data,
+            apiKey: geminiKey.trim(),
+          }),
+        });
 
-      // Direct client fetch (No Vercel 10s timeout!)
-      const response = await fetch(`${backendUrl}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+        clearTimeout(step1);
+        clearTimeout(step2);
+      } else {
+        addLog("Colab GPU ব্যাকএন্ডে ইমেজ পাঠানো হচ্ছে...", "🚀");
+        const step1 = setTimeout(() => addLog("কালার প্যালেট ও ডমিন্যান্ট ব্যাকগ্রাউন্ড নির্ণয় হচ্ছে...", "🎨"), 3000);
+        const step2 = setTimeout(() => addLog("EasyOCR টেক্সট ও পিক্সেল বাউন্ডিং বক্স খুঁজছে...", "🔍"), 8000);
+        const step3 = setTimeout(() => addLog("Vision AI ভিজ্যুয়াল লেআউট বিশ্লেষণ করছে...", "👁️"), 15000);
+        const step4 = setTimeout(() => addLog("পিক্সেল-একুরেট রেসপন্সিভ HTML/CSS জেনারেট হচ্ছে...", "💻"), 25000);
 
-      clearTimeout(step1);
-      clearTimeout(step2);
-      clearTimeout(step3);
-      clearTimeout(step4);
+        response = await fetch(`${backendUrl}/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: base64Data,
+            filename: file.name
+          }),
+        });
+
+        clearTimeout(step1);
+        clearTimeout(step2);
+        clearTimeout(step3);
+        clearTimeout(step4);
+      }
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
@@ -237,7 +260,7 @@ export default function Home() {
       console.error(err);
       let msg = err.message || "";
       if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-        msg = "কানেকশন এরর: ব্রাউজার আপনার ব্যাকএন্ডে কানেক্ট হতে পারছে না। নিশ্চিত করুন আপনার HuggingFace Space বা Colab রানিং অবস্থায় আছে এবং URL টি সঠিক।";
+        msg = "কানেকশন এরর: সার্ভারে কানেক্ট হতে পারছে না। আপনার ইন্টারনেট বা Colab রানিং আছে কিনা চেক করুন।";
       }
       addLog(`ত্রুটি: ${msg}`, "❌");
       setError(msg);
@@ -368,67 +391,70 @@ export default function Home() {
 
         {/* Backend Status Pill */}
         <div className="flex items-center gap-2 text-xs">
-          <span className={`w-2.5 h-2.5 rounded-full ${urlStatus === "ok" ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-          <span className="font-mono text-slate-300">
-            {urlStatus === "ok"
-              ? `${backendUrl.includes(".hf.space") ? "HuggingFace Space" : "Colab Backend"}: Connected ✅`
-              : "Backend Disconnected ❌"}
-          </span>
+          {engine === "gemini" ? (
+            <>
+              <span className={`w-2.5 h-2.5 rounded-full ${geminiKey.trim() ? "bg-emerald-500 animate-pulse" : "bg-amber-400"}`} />
+              <span className="font-mono text-slate-300">
+                {geminiKey.trim() ? "Gemini 1.5 Flash: 0% Filter Ready ✅" : "Gemini API Key দিন 🔑"}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={`w-2.5 h-2.5 rounded-full ${urlStatus === "ok" ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+              <span className="font-mono text-slate-300">
+                {urlStatus === "ok" ? "Colab Backend: Connected ✅" : "Colab Disconnected ❌"}
+              </span>
+            </>
+          )}
         </div>
       </header>
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* 2. SETUP & UPLOAD BAR (DUAL MODE: HUGGINGFACE & COLAB)                  */}
+      {/* 2. SETUP & UPLOAD BAR (DUAL ENGINE: GEMINI 1.5 & COLAB)                 */}
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       <div className="bg-[#11131c] border-b border-[#1f2233] p-4">
         <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4">
           
-          {/* Box 1: Backend Choice (HuggingFace vs Colab) */}
+          {/* Box 1: Engine Switcher */}
           <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <span>1.</span> Backend Engine
+                  <span>1.</span> AI Engine
                 </span>
-                <button
-                  onClick={() => setShowGuide(true)}
-                  className="text-[11px] text-amber-400 hover:text-amber-300 underline flex items-center gap-1"
-                >
-                  📖 HF Guide (২ মি.)
-                </button>
+                <span className="text-[10px] bg-emerald-950/60 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded font-mono">
+                  BLOCK_NONE 0% Filter
+                </span>
               </div>
 
-              {/* Tabs */}
+              {/* Engine Tabs */}
               <div className="grid grid-cols-2 gap-1 bg-[#0f111a] p-1 rounded-lg border border-[#23273a] mb-2">
                 <button
-                  onClick={() => setBackendType("hf")}
-                  className={`py-1 text-[11px] rounded font-semibold transition-all ${backendType === "hf" ? "bg-violet-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`}
+                  onClick={() => setEngine("gemini")}
+                  className={`py-1.5 text-[11px] rounded-md font-bold transition-all ${engine === "gemini" ? "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`}
                 >
-                  🌟 HuggingFace (Free)
+                  ✨ Google Gemini
                 </button>
                 <button
-                  onClick={() => setBackendType("colab")}
-                  className={`py-1 text-[11px] rounded font-semibold transition-all ${backendType === "colab" ? "bg-violet-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`}
+                  onClick={() => setEngine("colab")}
+                  className={`py-1.5 text-[11px] rounded-md font-bold transition-all ${engine === "colab" ? "bg-violet-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`}
                 >
                   ⚡ Google Colab
                 </button>
               </div>
             </div>
 
-            {backendType === "hf" ? (
-              <div className="flex gap-1.5 mt-1">
-                <button
-                  onClick={copyHfApp}
-                  className="flex-1 py-1.5 bg-[#222538] hover:bg-[#2c3049] text-[11px] font-bold text-violet-300 rounded-lg border border-violet-500/20 transition-all"
+            {engine === "gemini" ? (
+              <div className="flex items-center justify-between mt-1 text-[11px]">
+                <span className="text-slate-400">প্রতিদিন ১,৫০০টি ইমেজ সম্পূর্ণ ফ্রি</span>
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-amber-400 hover:text-amber-300 underline font-semibold flex items-center gap-1"
                 >
-                  {copiedApp ? "✅ Copied!" : "📋 Copy app.py"}
-                </button>
-                <button
-                  onClick={copyHfReqs}
-                  className="flex-1 py-1.5 bg-[#222538] hover:bg-[#2c3049] text-[11px] font-bold text-fuchsia-300 rounded-lg border border-fuchsia-500/20 transition-all"
-                >
-                  {copiedReqs ? "✅ Copied!" : "📋 requirements"}
-                </button>
+                  ফ্রি Key নিন ↗
+                </a>
               </div>
             ) : (
               <div className="flex gap-1.5 mt-1">
@@ -450,33 +476,50 @@ export default function Home() {
             )}
           </div>
 
-          {/* Box 2: Backend URL Validate */}
+          {/* Box 2: Key or URL Input */}
           <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
             <div>
               <span className="text-xs font-bold text-white flex items-center gap-1.5 mb-1">
-                <span>2.</span> {backendType === "hf" ? "HuggingFace Space URL" : "Colab Cloudflare URL"}
+                <span>2.</span> {engine === "gemini" ? "Google AI Studio API Key" : "Colab Cloudflare URL"}
               </span>
               <p className="text-[11px] text-slate-400">
-                {backendType === "hf" ? "আপনার Space-এর ডিরেক্ট URL টি পেস্ট করুন" : "Colab থেকে পাওয়া পাবলিক URL টি দিন"}
+                {engine === "gemini"
+                  ? "aistudio.google.com থেকে ফ্রি Key দিন"
+                  : "Colab থেকে পাওয়া পাবলিক URL টি দিন"}
               </p>
             </div>
             <div className="flex gap-1.5 mt-2.5">
-              <input
-                type="text"
-                value={backendUrl}
-                onChange={(e) => { setBackendUrl(e.target.value); setUrlStatus("idle"); }}
-                onKeyDown={(e) => e.key === "Enter" && testConnection()}
-                placeholder={backendType === "hf" ? "https://username-space.hf.space" : "https://xxxx.trycloudflare.com"}
-                className="flex-1 px-2.5 py-1.5 bg-[#0b0c12] border border-[#2c3049] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-violet-500"
-              />
-              <button
-                onClick={() => testConnection()}
-                disabled={!backendUrl || urlStatus === "checking"}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                  ${urlStatus === "checking" ? "bg-yellow-500/20 text-yellow-400 animate-pulse" : "bg-violet-600 hover:bg-violet-500 text-white"}`}
-              >
-                {urlStatus === "checking" ? "..." : "Validate"}
-              </button>
+              {engine === "gemini" ? (
+                <input
+                  type="password"
+                  value={geminiKey}
+                  onChange={(e) => {
+                    setGeminiKey(e.target.value);
+                    localStorage.setItem("geminiApiKey", e.target.value);
+                  }}
+                  placeholder="AIzaSy... (Paste Free Gemini Key)"
+                  className="flex-1 px-2.5 py-1.5 bg-[#0b0c12] border border-[#2c3049] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-violet-500"
+                />
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={backendUrl}
+                    onChange={(e) => { setBackendUrl(e.target.value); setUrlStatus("idle"); }}
+                    onKeyDown={(e) => e.key === "Enter" && testConnection()}
+                    placeholder="https://xxxx.trycloudflare.com"
+                    className="flex-1 px-2.5 py-1.5 bg-[#0b0c12] border border-[#2c3049] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-violet-500"
+                  />
+                  <button
+                    onClick={() => testConnection()}
+                    disabled={!backendUrl || urlStatus === "checking"}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                      ${urlStatus === "checking" ? "bg-yellow-500/20 text-yellow-400 animate-pulse" : "bg-violet-600 hover:bg-violet-500 text-white"}`}
+                  >
+                    {urlStatus === "checking" ? "..." : "Validate"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -500,7 +543,7 @@ export default function Home() {
               
               <button
                 onClick={startAnalyze}
-                disabled={!file || urlStatus !== "ok" || loading}
+                disabled={!file || loading || (engine === "gemini" ? !geminiKey.trim() : urlStatus !== "ok")}
                 className="px-4 py-2 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-purple-600 hover:opacity-95 disabled:opacity-40 text-white font-bold text-xs rounded-lg shadow-md shadow-violet-500/20 transition-all whitespace-nowrap"
               >
                 {loading ? `⏳ Processing (${elapsed}s)` : "🚀 Convert to Figma"}
