@@ -12,7 +12,13 @@ export default function Home() {
   const [dragging,   setDragging]   = useState(false);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState("");
-  const [copiedCode, setCopiedCode] = useState(false);
+  
+  // Backend type & modal state
+  const [backendType, setBackendType] = useState("hf"); // 'hf' | 'colab'
+  const [showGuide,   setShowGuide]   = useState(false);
+  const [copiedApp,   setCopiedApp]   = useState(false);
+  const [copiedReqs,  setCopiedReqs]  = useState(false);
+  const [copiedCode,  setCopiedCode]  = useState(false);
 
   // ── Live Progress Stream Logs ──
   const [logs,       setLogs]       = useState([]);
@@ -44,7 +50,7 @@ export default function Home() {
   const splitRef    = useRef(null);
   const isDragging  = useRef(false);
 
-  // Restore saved Colab URL
+  // Restore saved Backend URL
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -52,6 +58,31 @@ export default function Home() {
       testConnection(saved);
     }
   }, []);
+
+  // ── Copy HuggingFace Space Files ──
+  const copyHfApp = async () => {
+    try {
+      const res = await fetch("/hfAppCode.json");
+      const data = await res.json();
+      await navigator.clipboard.writeText(data.code);
+      setCopiedApp(true);
+      setTimeout(() => setCopiedApp(false), 3000);
+    } catch {
+      alert("Copy failed. Please try again.");
+    }
+  };
+
+  const copyHfReqs = async () => {
+    try {
+      const res = await fetch("/hfReqs.json");
+      const data = await res.json();
+      await navigator.clipboard.writeText(data.code);
+      setCopiedReqs(true);
+      setTimeout(() => setCopiedReqs(false), 3000);
+    } catch {
+      alert("Copy failed. Please try again.");
+    }
+  };
 
   // ── Copy Colab Code from JSON ──
   const copyColabCode = async () => {
@@ -66,7 +97,7 @@ export default function Home() {
     }
   };
 
-  // ── Test Colab Ping ──
+  // ── Test Backend Ping ──
   const testConnection = async (url) => {
     const cleanUrl = (url || backendUrl).trim().replace(/\/$/, "");
     if (!cleanUrl) return;
@@ -74,7 +105,7 @@ export default function Home() {
     setError("");
     try {
       const r = await fetch(`${cleanUrl}/ping`, {
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(10000),
       });
       const d = await r.json();
       if (d.pong) {
@@ -143,13 +174,14 @@ export default function Home() {
       });
 
       const base64Data = await toBase64(file);
-      addLog("Colab GPU ব্যাকএন্ডে ইমেজ পাঠানো হচ্ছে...", "🚀");
+      const isHf = backendUrl.includes(".hf.space");
+      addLog(`${isHf ? "HuggingFace Space" : "Colab GPU"} ব্যাকএন্ডে ইমেজ পাঠানো হচ্ছে...`, "🚀");
 
       // Simulated realistic sub-step logger
-      const step1 = setTimeout(() => addLog("ডিকোড ও কালার প্যালেট তৈরি হচ্ছে...", "🎨"), 4000);
-      const step2 = setTimeout(() => addLog("EasyOCR টেক্সট ও পিক্সেল বাউন্ডিং বক্স খুঁজছে...", "🔍"), 10000);
-      const step3 = setTimeout(() => addLog("Vision AI (llava) ভিজ্যুয়াল লেআউট বিশ্লেষণ করছে...", "👁️"), 20000);
-      const step4 = setTimeout(() => addLog("Hermes3:8b পিক্সেল-একুরেট HTML/CSS কোড জেনারেট করছে...", "💻"), 35000);
+      const step1 = setTimeout(() => addLog("কালার প্যালেট ও ডমিন্যান্ট ব্যাকগ্রাউন্ড নির্ণয় হচ্ছে...", "🎨"), 3000);
+      const step2 = setTimeout(() => addLog("EasyOCR টেক্সট ও পিক্সেল বাউন্ডিং বক্স খুঁজছে...", "🔍"), 8000);
+      const step3 = setTimeout(() => addLog("ভিজ্যুয়াল লেআউট ও স্ট্রাকচার বিশ্লেষণ হচ্ছে...", "👁️"), 15000);
+      const step4 = setTimeout(() => addLog("পিক্সেল-একুরেট রেসপন্সিভ HTML/CSS জেনারেট হচ্ছে...", "💻"), 25000);
 
       const payload = {
         image: base64Data,
@@ -174,20 +206,22 @@ export default function Home() {
       }
 
       const data = await response.json();
-      if (!data.success) throw new Error(data.error || "Processing failed");
+      if (!data.success && data.status !== "success") {
+        throw new Error(data.error || "Processing failed");
+      }
 
       addLog(`সফল! ${data.texts?.length || 0} টি টেক্সট এলিমেন্ট পাওয়া গেছে।`, "✅");
       addLog("Figma Studio Workspace রেন্ডার হচ্ছে...", "🎉");
 
       // Initialize Studio Data
       setTexts(data.texts || []);
-      setGenHTML(data.generatedHTML || "");
+      setGenHTML(data.generatedHTML || data.generated_html || data.html || "");
       setFilename(data.filename || file.name);
       setImgSrc(data.imageDataUrl || base64Data);
-      setCanvasW(data.width || 1000);
-      setCanvasH(data.height || 1400);
-      setDominantColor(data.dominantColor || "#ffffff");
-      setPalette(data.palette || []);
+      setCanvasW(data.width || data.canvas?.width || 1000);
+      setCanvasH(data.height || data.canvas?.height || 1400);
+      setDominantColor(data.dominantColor || data.colors?.dominant || "#ffffff");
+      setPalette(data.palette || data.colors?.palette || []);
 
       const initialTexts = {};
       (data.texts || []).forEach(t => { initialTexts[t.id] = t.text; });
@@ -201,8 +235,12 @@ export default function Home() {
 
     } catch (err) {
       console.error(err);
-      addLog(`ত্রুটি: ${err.message}`, "❌");
-      setError(err.message);
+      let msg = err.message || "";
+      if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+        msg = "কানেকশন এরর: ব্রাউজার আপনার ব্যাকএন্ডে কানেক্ট হতে পারছে না। নিশ্চিত করুন আপনার HuggingFace Space বা Colab রানিং অবস্থায় আছে এবং URL টি সঠিক।";
+      }
+      addLog(`ত্রুটি: ${msg}`, "❌");
+      setError(msg);
       setLoading(false);
     }
   };
@@ -215,7 +253,7 @@ export default function Home() {
       const val = (curTexts[t.id] ?? t.text)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       html = html.replace(
-        new RegExp(`(id=["']${t.id}["'][^>]*>)[^<]*`, "g"),
+        new RegExp(`(id=["'](?:el-)?${t.id}["'][^>]*>)[^<]*`, "g"),
         (_, tag) => tag + val
       );
     });
@@ -233,9 +271,9 @@ export default function Home() {
     const handleFrameClick = () => {
       try {
         texts.forEach(t => {
-          const el = doc.getElementById(t.id);
+          const el = doc.getElementById(t.id) || doc.getElementById("el-" + t.id);
           if (el) {
-            el.style.outline = selectedId === t.id ? "2px solid #0ea5e9" : "none";
+            el.style.outline = selectedId === t.id ? "2px solid #8b5cf6" : "none";
             el.onclick = (e) => {
               e.stopPropagation();
               setSelectedId(t.id);
@@ -328,49 +366,99 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Colab Status Pill */}
+        {/* Backend Status Pill */}
         <div className="flex items-center gap-2 text-xs">
           <span className={`w-2.5 h-2.5 rounded-full ${urlStatus === "ok" ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
           <span className="font-mono text-slate-300">
-            {urlStatus === "ok" ? "Colab Backend: Connected ✅" : "Colab Disconnected ❌"}
+            {urlStatus === "ok"
+              ? `${backendUrl.includes(".hf.space") ? "HuggingFace Space" : "Colab Backend"}: Connected ✅`
+              : "Backend Disconnected ❌"}
           </span>
         </div>
       </header>
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* 2. SETUP & UPLOAD BAR (COLLAPSIBLE / ACCORDION)                         */}
+      {/* 2. SETUP & UPLOAD BAR (DUAL MODE: HUGGINGFACE & COLAB)                  */}
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       <div className="bg-[#11131c] border-b border-[#1f2233] p-4">
         <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4">
           
-          {/* Box 1: Colab Code Copy */}
+          {/* Box 1: Backend Choice (HuggingFace vs Colab) */}
           <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <span>1.</span> Colab Code
+                  <span>1.</span> Backend Engine
                 </span>
-                <a href="https://colab.research.google.com" target="_blank" rel="noreferrer" className="text-[11px] text-violet-400 hover:underline">
+                <button
+                  onClick={() => setShowGuide(true)}
+                  className="text-[11px] text-amber-400 hover:text-amber-300 underline flex items-center gap-1"
+                >
+                  📖 HF Guide (২ মি.)
+                </button>
+              </div>
+
+              {/* Tabs */}
+              <div className="grid grid-cols-2 gap-1 bg-[#0f111a] p-1 rounded-lg border border-[#23273a] mb-2">
+                <button
+                  onClick={() => setBackendType("hf")}
+                  className={`py-1 text-[11px] rounded font-semibold transition-all ${backendType === "hf" ? "bg-violet-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`}
+                >
+                  🌟 HuggingFace (Free)
+                </button>
+                <button
+                  onClick={() => setBackendType("colab")}
+                  className={`py-1 text-[11px] rounded font-semibold transition-all ${backendType === "colab" ? "bg-violet-600 text-white shadow" : "text-slate-400 hover:text-slate-200"}`}
+                >
+                  ⚡ Google Colab
+                </button>
+              </div>
+            </div>
+
+            {backendType === "hf" ? (
+              <div className="flex gap-1.5 mt-1">
+                <button
+                  onClick={copyHfApp}
+                  className="flex-1 py-1.5 bg-[#222538] hover:bg-[#2c3049] text-[11px] font-bold text-violet-300 rounded-lg border border-violet-500/20 transition-all"
+                >
+                  {copiedApp ? "✅ Copied!" : "📋 Copy app.py"}
+                </button>
+                <button
+                  onClick={copyHfReqs}
+                  className="flex-1 py-1.5 bg-[#222538] hover:bg-[#2c3049] text-[11px] font-bold text-fuchsia-300 rounded-lg border border-fuchsia-500/20 transition-all"
+                >
+                  {copiedReqs ? "✅ Copied!" : "📋 requirements"}
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-1.5 mt-1">
+                <button
+                  onClick={copyColabCode}
+                  className="flex-1 py-1.5 bg-[#222538] hover:bg-[#2c3049] text-[11px] font-bold text-violet-300 rounded-lg border border-violet-500/20 transition-all"
+                >
+                  {copiedCode ? "✅ Copied!" : "📋 Copy Colab Code"}
+                </button>
+                <a
+                  href="https://colab.research.google.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-2.5 py-1.5 bg-[#1b1e2c] hover:bg-[#23273a] text-[11px] text-violet-400 rounded-lg border border-violet-500/20 flex items-center"
+                >
                   Open Colab ↗
                 </a>
               </div>
-              <p className="text-[11px] text-slate-400">Colab এ কোড পেস্ট করে T4 GPU তে Run করুন</p>
-            </div>
-            <button
-              onClick={copyColabCode}
-              className="mt-2.5 w-full py-2 bg-[#222538] hover:bg-[#2c3049] text-xs font-bold text-violet-300 rounded-lg border border-violet-500/20 transition-all flex items-center justify-center gap-1.5"
-            >
-              {copiedCode ? "✅ Copied to Clipboard!" : "📋 Copy Colab Code"}
-            </button>
+            )}
           </div>
 
-          {/* Box 2: Colab URL Validate */}
+          {/* Box 2: Backend URL Validate */}
           <div className="bg-[#171926] p-3.5 rounded-xl border border-[#25293d] flex flex-col justify-between">
             <div>
               <span className="text-xs font-bold text-white flex items-center gap-1.5 mb-1">
-                <span>2.</span> Cloudflare URL
+                <span>2.</span> {backendType === "hf" ? "HuggingFace Space URL" : "Colab Cloudflare URL"}
               </span>
-              <p className="text-[11px] text-slate-400">Colab থেকে পাওয়া পাবলিক URL টি দিন</p>
+              <p className="text-[11px] text-slate-400">
+                {backendType === "hf" ? "আপনার Space-এর ডিরেক্ট URL টি পেস্ট করুন" : "Colab থেকে পাওয়া পাবলিক URL টি দিন"}
+              </p>
             </div>
             <div className="flex gap-1.5 mt-2.5">
               <input
@@ -378,7 +466,7 @@ export default function Home() {
                 value={backendUrl}
                 onChange={(e) => { setBackendUrl(e.target.value); setUrlStatus("idle"); }}
                 onKeyDown={(e) => e.key === "Enter" && testConnection()}
-                placeholder="https://xxxx.trycloudflare.com"
+                placeholder={backendType === "hf" ? "https://username-space.hf.space" : "https://xxxx.trycloudflare.com"}
                 className="flex-1 px-2.5 py-1.5 bg-[#0b0c12] border border-[#2c3049] rounded-lg text-white text-xs font-mono focus:outline-none focus:border-violet-500"
               />
               <button
@@ -433,10 +521,12 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <div className="w-3.5 h-3.5 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
                 <span className="text-xs font-bold text-white uppercase tracking-wider">
-                  Live Colab GPU Processing Terminal ({elapsed}s)
+                  Live AI Processing Terminal ({elapsed}s)
                 </span>
               </div>
-              <span className="text-xs text-slate-400 font-mono">llava + hermes3:8b</span>
+              <span className="text-xs text-slate-400 font-mono">
+                {backendUrl.includes(".hf.space") ? "HuggingFace Space" : "llava + hermes3:8b"}
+              </span>
             </div>
 
             <div className="bg-[#050608] rounded-lg p-3 border border-[#1b1e2c] font-mono text-xs space-y-1.5 max-h-32 overflow-y-auto">
@@ -455,6 +545,75 @@ export default function Home() {
       {error && (
         <div className="bg-red-950/40 border-b border-red-500/40 p-3 text-center">
           <p className="text-xs text-red-400 font-medium">❌ {error}</p>
+        </div>
+      )}
+
+      {/* ── HuggingFace 2-Minute Quick Guide Modal ── */}
+      {showGuide && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#141624] border border-[#2b304c] rounded-2xl max-w-lg w-full p-5 text-slate-200 shadow-2xl">
+            <div className="flex items-center justify-between mb-4 border-b border-[#23273c] pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🌟</span>
+                <h3 className="font-bold text-sm text-white">HuggingFace Space সেটআপ গাইড (২ মিনিট)</h3>
+              </div>
+              <button
+                onClick={() => setShowGuide(false)}
+                className="text-slate-400 hover:text-white text-lg font-bold px-2 py-0.5 rounded"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs leading-relaxed">
+              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
+                <p className="font-bold text-violet-400 mb-1">ধাপ ১: HuggingFace-এ নতুন Space তৈরি করুন</p>
+                <p className="text-slate-300">
+                  <a href="https://huggingface.co/new-space" target="_blank" rel="noreferrer" className="text-fuchsia-400 underline font-semibold">
+                    huggingface.co/new-space ↗
+                  </a> এ যান। Space name দিন (যেমন: <code className="text-amber-300 font-mono">photomake-backend</code>) এবং Space SDK হিসেবে <code className="text-emerald-400 font-mono">Gradio</code> সিলেক্ট করুন (License: MIT)।
+                </p>
+              </div>
+
+              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
+                <p className="font-bold text-violet-400 mb-1">ধাপ ২: app.py পেস্ট করুন</p>
+                <p className="text-slate-300 mb-2">Space-এর "Files" ট্যাবে গিয়ে <code className="text-amber-300 font-mono">app.py</code> তৈরি করে কোড পেস্ট করে Commit দিন।</p>
+                <button
+                  onClick={copyHfApp}
+                  className="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded"
+                >
+                  {copiedApp ? "✅ Copied app.py!" : "📋 Copy app.py Code"}
+                </button>
+              </div>
+
+              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
+                <p className="font-bold text-violet-400 mb-1">ধাপ ৩: requirements.txt পেস্ট করুন</p>
+                <p className="text-slate-300 mb-2">একইভাবে "Add file" ক্লিক করে <code className="text-amber-300 font-mono">requirements.txt</code> তৈরি করুন এবং নিচের ডিপেনডেন্সিগুলো পেস্ট করুন।</p>
+                <button
+                  onClick={copyHfReqs}
+                  className="px-3 py-1 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold rounded"
+                >
+                  {copiedReqs ? "✅ Copied requirements!" : "📋 Copy requirements.txt"}
+                </button>
+              </div>
+
+              <div className="p-2.5 bg-[#0e1018] rounded-lg border border-[#1f2235]">
+                <p className="font-bold text-violet-400 mb-1">ধাপ ৪: URL কপি করে Validate চাপুন</p>
+                <p className="text-slate-300">
+                  Space-টি Running হলে উপরের ডানদিকের তিনটি ডট (⋮) ক্লিক করে "Embed this Space" বা ডিরেক্ট লিঙ্ক কপি করুন: <code className="text-emerald-300 font-mono">https://username-photomake-backend.hf.space</code>। সেই লিঙ্কটি Step 2 বক্সে দিয়ে Validate চাপুন!
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-[#23273c] flex justify-end">
+              <button
+                onClick={() => setShowGuide(false)}
+                className="px-4 py-1.5 bg-[#25293d] hover:bg-[#313650] text-white font-bold text-xs rounded-lg"
+              >
+                বুঝতে পেরেছি 👍
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

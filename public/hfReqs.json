@@ -1,0 +1,1 @@
+{"code": "fastapi>=0.100.0\nuvicorn>=0.23.0\npython-multipart\npillow>=10.0.0\neasyocr>=1.7.0\ncolorthief>=0.2.1\ngradio>=4.44.0\npydantic>=2.0.0\nrequests\nopencv-python-headless\n"}
